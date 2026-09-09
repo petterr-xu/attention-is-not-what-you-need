@@ -1,0 +1,10 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# 构建产物
+build/
+*.app
+
+# macOS
+.DS_Store
