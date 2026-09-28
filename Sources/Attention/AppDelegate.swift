@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupFloatingPanel()
         observeState()
         observeMenuBarPanel()
+        UpdateChecker.shared.start()
     }
 
     // MARK: - 悬浮窗
@@ -107,6 +108,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 菜单栏面板联动
 
+    /// 收起菜单栏面板。
+    ///
+    /// 悬浮窗是 nonactivatingPanel，点击它不会让应用失活，系统不认为发生了「点击外部」，
+    /// 因此菜单栏面板不会自动关闭，需要主动收起，否则两个列表会同时出现。
+    static func dismissMenuBarPanel() {
+        for window in NSApp.windows
+        where window !== floatingPanel
+            && window.level.rawValue >= NSWindow.Level.statusBar.rawValue {
+            window.orderOut(nil)
+        }
+    }
+
     /// 菜单栏面板打开（成为 key window）时，若悬浮窗处于展开态则自动折叠，避免两个列表同时出现
     private func observeMenuBarPanel() {
         NotificationCenter.default.addObserver(
@@ -149,4 +162,16 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
 /// 无边框面板默认不能成为 key window，导致 TextField 无法输入；重写使其可成为 key
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// 点击悬浮窗时收起菜单栏面板，避免两个列表同时出现。
+    ///
+    /// 不能依赖系统的自动关闭：悬浮窗是 nonactivatingPanel，点击不会让应用失活；
+    /// 又因为 becomesKeyOnlyIfNeeded，点击列表空白处时窗口根本不会成为 key window、
+    /// 不会发生 key window 切换，「点第二下才关」就是这么来的。这里直接主动收起。
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            AppDelegate.dismissMenuBarPanel()
+        }
+        super.sendEvent(event)
+    }
 }

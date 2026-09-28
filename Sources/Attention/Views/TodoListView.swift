@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 待办主视图：菜单栏面板与悬浮窗共用
 struct TodoListView: View {
@@ -9,6 +10,7 @@ struct TodoListView: View {
     var showsPanelToggle: Bool = true
     /// 是否显示标题栏折叠按钮（仅悬浮窗内显示）
     var showsCollapseButton: Bool = false
+    @ObservedObject private var updateChecker = UpdateChecker.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,19 +82,48 @@ struct TodoListView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // 底部：悬浮窗开关
+            // 底部一行：菜单栏面板是「显示悬浮窗」开关 + 更新提示，
+            // 悬浮窗没有开关行、只放更新提示。两者都贴面板底部，位置一致。
             if showsPanelToggle {
                 Divider()
-                Toggle(isOn: $state.showFloatingPanel) {
-                    Label("显示悬浮窗", systemImage: "macwindow")
-                        .font(.callout)
+                HStack(spacing: 0) {
+                    Toggle("显示悬浮窗", isOn: $state.showFloatingPanel)
+                        .toggleStyle(.checkbox)
+                    Spacer()
+                    updateBadge
                 }
-                .toggleStyle(.switch)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            } else if updateChecker.availableVersion != nil {
+                Divider()
+                HStack {
+                    Spacer()
+                    updateBadge
+                }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
         }
         .frame(width: 360, height: 440)
+    }
+
+    /// 有新版本时的提示图标。界面上不出现文字，版本号通过悬停提示给出。
+    /// 无更新时不渲染任何内容，因此不影响原有布局。
+    @ViewBuilder
+    private var updateBadge: some View {
+        if let version = updateChecker.availableVersion {
+            Button {
+                if let url = updateChecker.releaseURL {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .help("有新版本 \(version)，点击前往下载")
+        }
     }
 
     private var canAdd: Bool {

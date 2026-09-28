@@ -14,19 +14,50 @@ struct TaskRowView: View {
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        VStack(spacing: 4) {
-            mainRow
-
-            if isExpanded {
+        if isExpanded {
+            // 展开态：确认按钮留在信息行内，与子任务区共用一块底纹
+            VStack(spacing: 4) {
+                mainRow
                 subtaskSection
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(rowBackgroundColor)
+            )
+        } else {
+            // 收起态：确认按钮独立成块放在行尾，底纹颜色与左侧一致
+            HStack(alignment: .top, spacing: 6) {
+                mainRow
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(rowBackgroundColor)
+                    )
+
+                finishButton
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(rowBackgroundColor)
+                    )
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(rowBackgroundColor)
-        )
+    }
+
+    /// 结束任务按钮本体，外层容器由 body 按展开状态决定
+    private var finishButton: some View {
+        Button {
+            state.finishTask(id: task.id)
+        } label: {
+            Image(systemName: "checkmark.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("结束任务")
     }
 
     // MARK: - 主行
@@ -64,15 +95,6 @@ struct TaskRowView: View {
             Text(timeText)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            Button {
-                state.finishTask(id: task.id)
-            } label: {
-                Image(systemName: "checkmark.circle")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("结束任务")
 
             Button {
                 if isEditing {
@@ -114,6 +136,11 @@ struct TaskRowView: View {
                 }
                 .buttonStyle(.plain)
                 .help("删除任务")
+            }
+
+            // 确认按钮始终在行尾：展开时留在行内共享底纹，收起时由 body 移到独立块
+            if isExpanded {
+                finishButton
             }
         }
     }
