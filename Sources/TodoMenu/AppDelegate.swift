@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupFloatingPanel()
         observeState()
+        observeMenuBarPanel()
     }
 
     // MARK: - 悬浮窗
@@ -69,9 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = AppState.shared.isPanelCollapsed ? collapsedSize : expandedSize
         let visible = screen.visibleFrame
         var frame = panel.frame
-        // 右上角锚点：折叠/展开时保持右上角不变，位置连续
-        let anchor = NSPoint(x: frame.maxX, y: frame.maxY)
-        var origin = NSPoint(x: anchor.x - target.width, y: anchor.y - target.height)
+        // 左上角锚点：折叠/展开时保持左上角不变，浮标与收起按钮同侧，避免鼠标左右移动
+        let anchor = NSPoint(x: frame.minX, y: frame.maxY)
+        var origin = NSPoint(x: anchor.x, y: anchor.y - target.height)
         // 边界钳制，避免超出屏幕
         if origin.x < visible.minX { origin.x = visible.minX }
         if origin.y < visible.minY { origin.y = visible.minY }
@@ -98,11 +99,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         AppState.shared.$isPanelCollapsed
-            .dropFirst()
             .sink { [weak self] _ in
                 self?.updatePanelSize()
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - 菜单栏面板联动
+
+    /// 菜单栏面板打开（成为 key window）时，若悬浮窗处于展开态则自动折叠，避免两个列表同时出现
+    private func observeMenuBarPanel() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            guard let keyWindow = NSApp.keyWindow else { return }
+            // 菜单栏面板的 window level 为 statusBar(25)；alert 为 modalPanel(8)、悬浮窗为 floating(3)，
+            // 用 level 精确区分，避免误触删除确认框
+            if keyWindow !== Self.floatingPanel,
+               keyWindow.level.rawValue >= NSWindow.Level.statusBar.rawValue,
+               !AppState.shared.isPanelCollapsed {
+                AppState.shared.isPanelCollapsed = true
+            }
+        }
     }
 }
 

@@ -103,7 +103,39 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 结束任务 → 进入已完成列表
+    // MARK: - 子任务操作
+
+    /// 给指定父任务添加子任务（按添加顺序追加）
+    func addSubtask(toParent id: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = todos.firstIndex(where: { $0.id == id }) else { return }
+        todos[idx].subtasks.append(Subtask(title: trimmed))
+    }
+
+    /// 重命名子任务
+    func renameSubtask(parentId: UUID, subtaskId: UUID, newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let pi = todos.firstIndex(where: { $0.id == parentId }),
+              let si = todos[pi].subtasks.firstIndex(where: { $0.id == subtaskId }) else { return }
+        todos[pi].subtasks[si].title = trimmed
+    }
+
+    /// 删除子任务
+    func deleteSubtask(parentId: UUID, subtaskId: UUID) {
+        guard let pi = todos.firstIndex(where: { $0.id == parentId }) else { return }
+        todos[pi].subtasks.removeAll(where: { $0.id == subtaskId })
+    }
+
+    /// 切换子任务完成状态（勾选）
+    func toggleSubtask(parentId: UUID, subtaskId: UUID) {
+        guard let pi = todos.firstIndex(where: { $0.id == parentId }),
+              let si = todos[pi].subtasks.firstIndex(where: { $0.id == subtaskId }) else { return }
+        todos[pi].subtasks[si].isDone.toggle()
+    }
+
+    /// 结束任务 → 进入已完成列表（子任务跟随）
     func finishTask(id: UUID) {
         guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
         let task = todos.remove(at: idx)
@@ -111,7 +143,8 @@ final class AppState: ObservableObject {
                                        title: task.title,
                                        createdAt: task.createdAt,
                                        finishedAt: Date(),
-                                       autoEnded: false))
+                                       autoEnded: false,
+                                       subtasks: task.subtasks))
     }
 
     /// 删除任务 → 彻底移除（不进入已完成列表）
@@ -125,10 +158,11 @@ final class AppState: ObservableObject {
         let c = completed.remove(at: idx)
         todos.append(TodoTask(id: c.id,
                               title: c.title,
-                              createdAt: c.createdAt,
+                              createdAt: Date(), // 重置创建时间，避免放回后被「跨自然周自动结束」立即完成
                               isActive: false,
                               activeSince: nil,
-                              suspendedSince: Date()))
+                              suspendedSince: Date(),
+                              subtasks: c.subtasks))
     }
 
     /// 跨自然周自动结束：创建于上一个自然周（或更早）的待办任务自动结束
@@ -142,7 +176,8 @@ final class AppState: ObservableObject {
                                            title: task.title,
                                            createdAt: task.createdAt,
                                            finishedAt: now,
-                                           autoEnded: true))
+                                           autoEnded: true,
+                                           subtasks: task.subtasks))
         }
     }
 

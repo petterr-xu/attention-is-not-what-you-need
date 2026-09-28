@@ -14,25 +14,25 @@ struct TodoListView: View {
         VStack(spacing: 0) {
             // 顶部标题栏
             HStack {
-                Text(showCompleted ? "已完成" : "待办")
-                    .font(.headline)
-                Spacer()
                 if showsCollapseButton {
                     Button {
                         state.isPanelCollapsed = true
                     } label: {
-                        Label("收起", systemImage: "chevron.up")
+                        Image(systemName: "chevron.up")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                     .help("折叠悬浮窗")
                 }
+                Text("You Need No Attention")
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                    .italic()
+                Spacer()
                 Button {
                     showCompleted.toggle()
                 } label: {
-                    Label(showCompleted ? "返回" : "已完成",
-                          systemImage: showCompleted ? "chevron.left" : "checkmark.circle")
+                    Image(systemName: showCompleted ? "chevron.left" : "checkmark.circle")
                         .font(.callout)
                 }
                 .buttonStyle(.plain)
@@ -44,7 +44,7 @@ struct TodoListView: View {
             // 添加任务输入框（仅待办页显示）
             if !showCompleted {
                 HStack(spacing: 6) {
-                    TextField("添加待办，回车确认…", text: $newTitle)
+                    TextField("type attention", text: $newTitle)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(addTask)
                     Button(action: addTask) {

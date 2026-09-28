@@ -29,7 +29,7 @@ struct CompletedListView: View {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(sorted) { task in
-                            completedRow(task)
+                            CompletedTaskRowView(task: task)
                         }
                     }
                     .padding(8)
@@ -44,31 +44,68 @@ struct CompletedListView: View {
             .padding(.horizontal)
         }
     }
+}
 
-    private func completedRow(_ task: CompletedTask) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+/// 单行已完成任务：点击标题可展开查看子任务（只读），右侧放回待办
+private struct CompletedTaskRowView: View {
+    @EnvironmentObject var state: AppState
+    let task: CompletedTask
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                if !task.subtasks.isEmpty {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(task.title)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if !task.subtasks.isEmpty { isExpanded.toggle() } }
                 if task.autoEnded {
                     Text("跨周自动结束")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-            }
-            Spacer()
-            Text(task.finishedAt, style: .time)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button {
-                state.restoreTask(id: task.id)
-            } label: {
-                Image(systemName: "arrow.uturn.backward.circle")
+                Text(task.finishedAt, style: .time)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                Button {
+                    state.restoreTask(id: task.id)
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("放回待办")
             }
-            .buttonStyle(.plain)
-            .help("放回待办")
+
+            if isExpanded && !task.subtasks.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(task.subtasks) { subtask in
+                        HStack(spacing: 6) {
+                            Image(systemName: subtask.isDone ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(.secondary)
+                            Text(subtask.title)
+                                .foregroundStyle(subtask.isDone ? .secondary : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.gray.opacity(0.08))
+                        )
+                    }
+                }
+                .padding(.leading, 22)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
