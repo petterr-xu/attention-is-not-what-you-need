@@ -21,13 +21,10 @@
 
 1. 双击打开 dmg，把窗口里的「Attention」拖进旁边的「Applications」文件夹
 2. 若提示「已存在同名项目」，选「替换」（升级时会出现）
-3. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 弹窗里再点一次「打开」
+3. **首次打开**：
+   应用未经过 Apple 公证，直接双击启动会被拦下并提示“该应用未经认证”，为打开Attention请不要选择“移到废纸篓”，请点击完成/确认并打开Mac设置->隐私与安全性，在该设置项的底部选择“仍要打开Attention”。
 
-应用未经 Apple 公证，直接双击会被 Gatekeeper 拦下；上述操作只需做一次，之后正常双击即可。若右键打开仍被拒绝，在终端执行：
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Attention.app"
-```
+上述操作只需做一次，之后正常双击即可。
 
 **系统要求**：macOS 13+、Apple Silicon（M 系列芯片）。
 
