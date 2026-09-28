@@ -30,7 +30,24 @@
 - **菜单栏图标**：点击顶部菜单栏的清单图标，弹出待办面板
 - **悬浮窗**：默认在屏幕右上角，可折叠成圆形浮标、可拖动；菜单栏面板底部「显示悬浮窗」开关控制显隐
 
-## 构建
+## 下载安装
+
+到 [Releases](https://github.com/petterr-xu/attention-is-not-what-you-need/releases) 下载最新的 `Attention-vX.Y.Z.zip`：
+
+1. 解压得到「Attention.app」，拖入「应用程序」文件夹
+2. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 弹窗里再点一次「打开」
+
+应用未经 Apple 公证（个人开发者分发需要每年 $99 的开发者账号），直接双击会被 Gatekeeper 拦下。上述操作只需做一次，之后正常双击即可。
+
+如果右键打开仍被拒绝，在终端执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Attention.app"
+```
+
+**系统要求**：macOS 13+、Apple Silicon（M 系列芯片）。
+
+## 构建（开发者）
 
 依赖：macOS 13+、Swift 工具链（无需完整 Xcode）。
 
@@ -38,7 +55,27 @@
 ./build.sh
 ```
 
-产物在 `build/待办.app`，拖入「应用程序」后双击运行，或 `open "build/待办.app"`。
+产物在 `build/Attention.app`，拖入「应用程序」后双击运行，或 `open "build/Attention.app"`。
+
+## 发布新版本
+
+```bash
+./release.sh 1.0.1            # 构建 + 打包 + 创建 GitHub Release
+./release.sh 1.0.1 --dry-run  # 只打包不上传，用于本地验证产物
+```
+
+脚本会自动编译、打包成 `build/Attention-vX.Y.Z.zip`、打 tag，并通过 `gh` 创建 Release（release notes 内含 Gatekeeper 绕过说明）。
+
+版本号也可单独传给 `build.sh`：`VERSION=1.0.1 ./build.sh`。
+
+## 图标
+
+图标由 `scripts/make-icon.swift` 用 CoreGraphics 矢量绘制生成——靛蓝→紫渐变底 + 三条清单行，第一行高亮代表「当前任务」，对应应用里「当前任务置顶」的核心交互。改设计后重新生成：
+
+```bash
+swift scripts/make-icon.swift /tmp/AppIcon.iconset
+iconutil -c icns /tmp/AppIcon.iconset -o Resources/AppIcon.icns
+```
 
 ## 使用
 
@@ -50,7 +87,7 @@
 
 ## 数据位置
 
-`~/Library/Application Support/TodoMenu/tasks.json`
+`~/Library/Application Support/Attention/tasks.json`
 
 ## 技术说明
 
@@ -62,4 +99,4 @@
 ## 常见问题
 
 - **看不到菜单栏图标**：请以 `.app` 方式运行（`open` 打开），纯命令行 `swift run` 不显示菜单栏图标。
-- **退出应用**：`pkill TodoMenu`（菜单栏应用无 Dock 图标）。
+- **退出应用**：`pkill Attention`（菜单栏应用无 Dock 图标）。

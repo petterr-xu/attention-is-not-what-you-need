@@ -190,7 +190,7 @@ final class AppState: ObservableObject {
 
     private static func defaultStorageURL() -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return dir.appendingPathComponent("TodoMenu", isDirectory: true)
+        return dir.appendingPathComponent("Attention", isDirectory: true)
                   .appendingPathComponent("tasks.json")
     }
 

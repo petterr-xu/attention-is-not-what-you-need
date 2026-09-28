@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "TodoMenu",
+    name: "Attention",
     platforms: [
         .macOS(.v13)
     ],
     targets: [
         .executableTarget(
-            name: "TodoMenu",
-            path: "Sources/TodoMenu"
+            name: "Attention",
+            path: "Sources/Attention"
         )
     ]
 )

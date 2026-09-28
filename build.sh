@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="待办"
-EXECUTABLE="TodoMenu"
-BUNDLE_ID="com.xuwenduan.todomenu"
-VERSION="1.0.0"
+APP_NAME="Attention"
+EXECUTABLE="Attention"
+BUNDLE_ID="com.xuwenduan.attention"
+VERSION="${VERSION:-1.0.0}"
 
 echo "==> 编译 release 版本..."
 swift build -c release
@@ -19,6 +19,7 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
+cp Resources/AppIcon.icns "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_DIR/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -37,6 +38,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
     <string>$VERSION</string>
     <key>CFBundleExecutable</key>
     <string>$EXECUTABLE</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
