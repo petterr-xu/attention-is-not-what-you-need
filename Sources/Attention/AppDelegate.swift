@@ -5,18 +5,167 @@ import Combine
 /// 负责创建与管理悬浮窗（NSPanel）
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var floatingPanel: NSPanel?
+    static weak var menuBarPopover: NSPopover?
     private var panel: NSPanel?
+    private var popover: NSPopover?
+    private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
 
     // 悬浮窗两种形态的固定尺寸
     private let expandedSize = NSSize(width: 360, height: 440)
     private let collapsedSize = NSSize(width: 40, height: 40)
+    /// 菜单栏面板尺寸，与 TodoListView 内部固定的 frame 一致
+    private let popoverSize = NSSize(width: 360, height: 440)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupStatusItem()
+        setupPopover()
         setupFloatingPanel()
         observeState()
-        observeMenuBarPanel()
         UpdateChecker.shared.start()
+    }
+
+    // MARK: - 菜单栏图标与面板
+
+    /// 菜单栏图标：左键开合待办面板，右键弹功能菜单
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "Attention")
+            image?.isTemplate = true          // 跟随菜单栏深浅色自动反色
+            button.image = image
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        statusItem = item
+    }
+
+    /// 待办面板：复用 TodoListView，改由 popover 承载
+    private func setupPopover() {
+        let popover = NSPopover()
+        popover.behavior = .transient         // 点击外部自动收起
+        popover.contentSize = popoverSize
+        popover.contentViewController = NSHostingController(
+            rootView: TodoListView().environmentObject(AppState.shared)
+        )
+        // 必须自己持强引用：menuBarPopover 是 weak，只存那里的话函数一返回就被释放，
+        // 表现为左键点击菜单栏图标毫无反应。
+        self.popover = popover
+        Self.menuBarPopover = popover
+    }
+
+    @objc private func statusItemClicked() {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    private func togglePopover() {
+        guard let popover, let button = statusItem?.button else { return }
+
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+
+        // 与悬浮窗互斥：面板要展开时把悬浮窗折成浮标，两个列表不同时出现
+        if !AppState.shared.isPanelCollapsed {
+            AppState.shared.isPanelCollapsed = true
+        }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    // MARK: - 右键菜单
+
+    /// 每次右键时重新构建，保证「显示悬浮窗」的勾选状态是最新的。
+    /// 注意不要常驻挂在 statusItem.menu 上，否则左键也会弹菜单。
+    private func showContextMenu() {
+        guard let button = statusItem?.button else { return }
+
+        let menu = NSMenu()
+
+        let floatingItem = NSMenuItem(
+            title: "显示悬浮窗", action: #selector(toggleFloatingPanel), keyEquivalent: ""
+        )
+        floatingItem.target = self
+        floatingItem.state = AppState.shared.showFloatingPanel ? .on : .off
+        menu.addItem(floatingItem)
+
+        let updateItem = NSMenuItem(
+            title: "检查更新", action: #selector(checkForUpdates), keyEquivalent: ""
+        )
+        updateItem.target = self
+        menu.addItem(updateItem)
+
+        let aboutItem = NSMenuItem(
+            title: "关于 Attention", action: #selector(showAbout), keyEquivalent: ""
+        )
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
+        menu.addItem(.separator())
+
+        // 不设 target，沿 responder chain 交给 NSApp
+        menu.addItem(NSMenuItem(
+            title: "退出 Attention",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: button.bounds.height + 4),
+            in: button
+        )
+    }
+
+    @objc private func toggleFloatingPanel() {
+        AppState.shared.showFloatingPanel.toggle()
+    }
+
+    @objc private func checkForUpdates() {
+        Task { @MainActor in
+            let newVersion = await UpdateChecker.shared.checkManually()
+            let alert = NSAlert()
+            if let newVersion {
+                alert.messageText = "发现新版本 \(newVersion)"
+                alert.informativeText = "当前版本 \(Self.appVersion)"
+                alert.addButton(withTitle: "前往下载")
+                alert.addButton(withTitle: "稍后")
+                NSApp.activate(ignoringOtherApps: true)
+                if alert.runModal() == .alertFirstButtonReturn,
+                   let url = UpdateChecker.shared.releaseURL {
+                    NSWorkspace.shared.open(url)
+                }
+            } else {
+                alert.messageText = "已是最新版本"
+                alert.informativeText = "当前版本 \(Self.appVersion)"
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc private func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "Attention"
+        alert.informativeText = """
+            版本 \(Self.appVersion)
+
+            Attention Is Not What You Need —— 把「记住要做什么」这件事交给工具。
+            """
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    /// 应用版本，来自 Info.plist
+    private static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
     // MARK: - 悬浮窗
@@ -108,34 +257,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 菜单栏面板联动
 
-    /// 收起菜单栏面板。
-    ///
-    /// 悬浮窗是 nonactivatingPanel，点击它不会让应用失活，系统不认为发生了「点击外部」，
-    /// 因此菜单栏面板不会自动关闭，需要主动收起，否则两个列表会同时出现。
+    /// 收起菜单栏面板。点击悬浮窗时调用——悬浮窗是 nonactivatingPanel，点击它不会让应用失活，
+    /// popover 的 transient 行为不会触发，需要主动关闭，否则两个列表会同时出现。
     static func dismissMenuBarPanel() {
-        for window in NSApp.windows
-        where window !== floatingPanel
-            && window.level.rawValue >= NSWindow.Level.statusBar.rawValue {
-            window.orderOut(nil)
-        }
-    }
-
-    /// 菜单栏面板打开（成为 key window）时，若悬浮窗处于展开态则自动折叠，避免两个列表同时出现
-    private func observeMenuBarPanel() {
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            guard let keyWindow = NSApp.keyWindow else { return }
-            // 菜单栏面板的 window level 为 statusBar(25)；alert 为 modalPanel(8)、悬浮窗为 floating(3)，
-            // 用 level 精确区分，避免误触删除确认框
-            if keyWindow !== Self.floatingPanel,
-               keyWindow.level.rawValue >= NSWindow.Level.statusBar.rawValue,
-               !AppState.shared.isPanelCollapsed {
-                AppState.shared.isPanelCollapsed = true
-            }
-        }
+        menuBarPopover?.performClose(nil)
     }
 }
 

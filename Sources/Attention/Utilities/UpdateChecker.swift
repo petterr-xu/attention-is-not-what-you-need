@@ -38,6 +38,13 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
+    /// 手动触发一次检查（供菜单里的「检查更新」使用）。
+    /// 返回发现的新版本号；已是最新或检查失败都返回 nil——对用户而言没有区别。
+    func checkManually() async -> String? {
+        await check()
+        return availableVersion
+    }
+
     /// 查询最新 Release 并与本地版本比对。
     /// 网络错误、超时、限流、尚未发布过 Release、解析失败——一律静默忽略，不打扰用户。
     private func check() async {
