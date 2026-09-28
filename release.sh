@@ -1,10 +1,13 @@
 #!/bin/bash
 #
-# 构建并发布 GitHub Release。
+# 构建并发布 GitHub Release（产物为带安装引导界面的 dmg）。
 #
 # 用法：
-#   ./release.sh 1.0.0             # 构建 + 打包 + 创建 release（自动打 tag）
+#   ./release.sh 1.0.0             # 构建 + 打包 dmg + 创建 release（自动打 tag）
 #   ./release.sh 1.0.0 --dry-run   # 只构建打包，不上传，用于本地验证产物
+#
+# 注意：本脚本只创建 tag 和 Release，不推 main 分支。发布前请先 git push，
+#       否则远程会出现「tag 指向新 commit，但 main 还停在旧 commit」的不一致。
 #
 set -euo pipefail
 
@@ -19,31 +22,26 @@ fi
 DRY_RUN="${2:-}"
 
 TAG="v$VERSION"
-ZIP_NAME="Attention-$TAG.zip"
+DMG_NAME="Attention-$TAG.dmg"
 
 echo "==> 构建 $TAG"
 VERSION="$VERSION" ./build.sh
 
 echo ""
-echo "==> 打包 $ZIP_NAME"
+echo "==> 打包 $DMG_NAME"
 mkdir -p build
-rm -f "build/$ZIP_NAME"
-# --keepParent 让解压后直接得到「Attention.app」，而不是散落的 Contents/
-# --norsrc 不写入 AppleDouble 的 ._ 文件：否则用 unzip（非 macOS 原生解压）
-#         会把 ._CodeResources 当成真实文件放进 _CodeSignature/，导致签名校验失败
-ditto -c -k --norsrc --keepParent "build/Attention.app" "build/$ZIP_NAME"
-ls -lh "build/$ZIP_NAME"
+./scripts/make-dmg.sh "build/Attention.app" "$VERSION" "build/$DMG_NAME"
 
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
   echo ""
-  echo "✅ 已打包（dry-run，未上传）：build/$ZIP_NAME"
+  echo "✅ 已打包（dry-run，未上传）：build/$DMG_NAME"
   echo "   去掉 --dry-run 即可发布到 GitHub。"
   exit 0
 fi
 
 echo ""
 echo "==> 创建 GitHub Release $TAG"
-gh release create "$TAG" "build/$ZIP_NAME" \
+gh release create "$TAG" "build/$DMG_NAME" \
   --title "Attention $TAG" \
   --notes "$(cat <<EOF
 ## Attention $TAG
@@ -52,10 +50,11 @@ macOS 菜单栏待办应用，把「记住要做什么」这件事交给工具�
 
 ### 安装
 
-1. 下载 $ZIP_NAME 并解压，得到「Attention.app」
-2. 拖入「应用程序」文件夹
+1. 下载 $DMG_NAME 并双击打开
+2. 把窗口里的「Attention」拖进旁边的「Applications」文件夹
+3. 如果提示「已存在同名项目」，选「替换」（升级时会出现）
 
-3. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 在弹窗里再点一次「打开」。
+4. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 在弹窗里再点一次「打开」。
 
    应用未经过 Apple 公证，直接双击会被 Gatekeeper 拦下。这一步只需做一次，之后正常双击即可。
 
