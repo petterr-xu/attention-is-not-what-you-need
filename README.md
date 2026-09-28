@@ -17,10 +17,11 @@
 
 ## 下载安装
 
-到 [Releases](https://github.com/petterr-xu/attention-is-not-what-you-need/releases) 下载最新的 `Attention-vX.Y.Z.zip`：
+到 [Releases](https://github.com/petterr-xu/attention-is-not-what-you-need/releases) 下载最新的 `Attention-vX.Y.Z.dmg`：
 
-1. 解压得到「Attention.app」，拖入「应用程序」文件夹
-2. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 弹窗里再点一次「打开」
+1. 双击打开 dmg，把窗口里的「Attention」拖进旁边的「Applications」文件夹
+2. 若提示「已存在同名项目」，选「替换」（升级时会出现）
+3. **首次打开需要右键**：在「应用程序」里右键点击「Attention」→ 选「打开」→ 弹窗里再点一次「打开」
 
 应用未经 Apple 公证，直接双击会被 Gatekeeper 拦下；上述操作只需做一次，之后正常双击即可。若右键打开仍被拒绝，在终端执行：
 
@@ -35,6 +36,7 @@ xattr -dr com.apple.quarantine "/Applications/Attention.app"
 启动后**没有 Dock 图标、也不会弹窗口**，去屏幕顶部菜单栏点击清单图标即可打开面板。
 
 - **菜单栏面板**：点击顶部菜单栏的清单图标弹出
+- **右键菜单**：右键点击菜单栏图标，可切换悬浮窗、检查更新、查看版本、退出应用
 - **悬浮窗**：默认在屏幕右上角，可折叠成圆形浮标、可拖动；面板底部「显示悬浮窗」开关控制显隐
 - **添加任务**：输入框输入后回车
 - **切换当前任务**：点击任务行
@@ -43,7 +45,7 @@ xattr -dr com.apple.quarantine "/Applications/Attention.app"
 ## 常见问题
 
 - **看不到菜单栏图标**：请以 `.app` 方式运行（`open` 打开），纯命令行 `swift run` 不显示菜单栏图标
-- **退出应用**：`pkill Attention`（菜单栏应用无 Dock 图标）
+- **退出应用**：右键点击菜单栏图标 → 「退出 Attention」；或在终端执行 `pkill Attention`
 - **数据存在哪**：`~/Library/Application Support/Attention/tasks.json`
 
 ## 开发
