@@ -89,12 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
+        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 检查更新 / 关于 / 退出
         let floatingItem = NSMenuItem(
             title: "显示悬浮窗", action: #selector(toggleFloatingPanel), keyEquivalent: ""
         )
         floatingItem.target = self
         floatingItem.state = AppState.shared.showFloatingPanel ? .on : .off
         menu.addItem(floatingItem)
+
+        menu.addItem(makeAutoEndItem())
 
         let updateItem = NSMenuItem(
             title: "检查更新", action: #selector(checkForUpdates), keyEquivalent: ""
@@ -108,8 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
-        menu.addItem(.separator())
-
         // 不设 target，沿 responder chain 交给 NSApp
         menu.addItem(NSMenuItem(
             title: "退出 Attention",
@@ -122,6 +123,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             at: NSPoint(x: 0, y: button.bounds.height + 4),
             in: button
         )
+    }
+
+    /// 「自动结束跨周任务」开关。
+    /// 功能说明走 toolTip 而不是行内问号——保持标准菜单项样式，悬停高亮、对齐、
+    /// 点完自动关闭都交给系统，不用自己复刻菜单项的绘制与交互。
+    private func makeAutoEndItem() -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "自动结束跨周任务",
+            action: #selector(toggleAutoEnd),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.state = AppState.shared.autoEndEnabled ? .on : .off
+        item.toolTip = "创建于上一个自然周（或更早）的任务，跨周后会自动结束并移入「已完成」列表；"
+            + "被自动结束的任务可在已完成列表里手动「放回」"
+        return item
+    }
+
+    @objc private func toggleAutoEnd() {
+        AppState.shared.autoEndEnabled.toggle()
     }
 
     @objc private func toggleFloatingPanel() {

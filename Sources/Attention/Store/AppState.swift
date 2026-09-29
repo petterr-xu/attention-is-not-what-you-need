@@ -18,6 +18,10 @@ final class AppState: ObservableObject {
     }
     /// 悬浮窗是否折叠成小条
     @Published var isPanelCollapsed = false
+    /// 是否自动结束跨自然周的待办任务（默认开启）
+    @Published var autoEndEnabled: Bool {
+        didSet { UserDefaults.standard.set(autoEndEnabled, forKey: "autoEndEnabled") }
+    }
 
     private var tickTimer: Timer?
     private var autoEndTimer: Timer?
@@ -27,6 +31,7 @@ final class AppState: ObservableObject {
     private init() {
         storageURL = Self.defaultStorageURL()
         showFloatingPanel = UserDefaults.standard.object(forKey: "showFloatingPanel") as? Bool ?? true
+        autoEndEnabled = UserDefaults.standard.object(forKey: "autoEndEnabled") as? Bool ?? true
         load()
         startTimers()
     }
@@ -165,8 +170,10 @@ final class AppState: ObservableObject {
                               subtasks: c.subtasks))
     }
 
-    /// 跨自然周自动结束：创建于上一个自然周（或更早）的待办任务自动结束
+    /// 跨自然周自动结束：创建于上一个自然周（或更早）的待办任务自动结束。
+    /// 受 `autoEndEnabled` 开关控制；关闭时不做任何处理（已结束的任务不会恢复）。
     func autoEndStaleTasks() {
+        guard autoEndEnabled else { return }
         let now = Date()
         let stale = todos.filter { AutoEndScheduler.isStale($0, now: now) }
         guard !stale.isEmpty else { return }
