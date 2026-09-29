@@ -6,8 +6,11 @@
 #   ./release.sh 1.0.0             # 构建 + 打包 dmg + 创建 release（自动打 tag）
 #   ./release.sh 1.0.0 --dry-run   # 只构建打包，不上传，用于本地验证产物
 #
-# 注意：本脚本只创建 tag 和 Release，不推 main 分支。发布前请先 git push，
-#       否则远程会出现「tag 指向新 commit，但 main 还停在旧 commit」的不一致。
+# 注意：本脚本只创建 tag 和 Release，不推 main 分支。
+#       发布前必须先 git push 并确认成功——gh release create 打 tag 时用的是
+#       远程默认分支的 HEAD，本地未推送的 commit 不会进 tag，会出现
+#       「tag 指向旧 commit，但 dmg 用的是新代码」的不一致。
+#       脚本开头有一段自检会把这种情况拦下来。
 #
 set -euo pipefail
 
@@ -23,6 +26,18 @@ DRY_RUN="${2:-}"
 
 TAG="v$VERSION"
 DMG_NAME="Attention-$TAG.dmg"
+
+# 发布前自检：gh release create 是用远程默认分支的 HEAD 打 tag 的，本地未推送的
+# commit 不会进 tag。不拦的话会出现「tag 指向旧 commit、dmg 却是新代码」的不一致。
+if [[ "$DRY_RUN" != "--dry-run" ]]; then
+  git fetch origin --quiet 2>/dev/null || true
+  UNPUSHED="$(git log --oneline origin/main..HEAD 2>/dev/null)"
+  if [[ -n "$UNPUSHED" ]]; then
+    echo "❌ 本地有未推送的 commit，请先 git push 并确认成功："
+    echo "$UNPUSHED"
+    exit 1
+  fi
+fi
 
 echo "==> 构建 $TAG"
 VERSION="$VERSION" ./build.sh
