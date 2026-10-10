@@ -28,12 +28,20 @@ final class AppState: ObservableObject {
     private var isLoading = false
     private let storageURL: URL
 
-    private init() {
-        storageURL = Self.defaultStorageURL()
+    private convenience init() {
+        self.init(storageURL: Self.defaultStorageURL(),
+                  autoEndEnabled: UserDefaults.standard.object(forKey: "autoEndEnabled") as? Bool ?? true,
+                  startTimers: true)
+    }
+
+    /// 可注入存储位置与开关的初始化入口，供测试构造隔离实例：
+    /// 注入临时文件路径并跳过定时器，避免测试触碰真实用户数据与偏好设置。
+    init(storageURL: URL, autoEndEnabled: Bool, startTimers: Bool) {
+        self.storageURL = storageURL
         showFloatingPanel = UserDefaults.standard.object(forKey: "showFloatingPanel") as? Bool ?? true
-        autoEndEnabled = UserDefaults.standard.object(forKey: "autoEndEnabled") as? Bool ?? true
+        self.autoEndEnabled = autoEndEnabled
         load()
-        startTimers()
+        if startTimers { self.startTimers() }
     }
 
     // MARK: - 计算属性
@@ -43,11 +51,15 @@ final class AppState: ObservableObject {
         todos.first(where: { $0.isActive })?.id
     }
 
-    /// 排序后的待办列表：当前任务永远第一，其余按挂起时长降序（suspendedSince 升序）
+    /// 排序后的待办列表：当前任务永远第一，其余非睡眠任务按挂起时长降序（suspendedSince 升序）。
+    /// 睡眠任务一律沉底，且相互之间仍按 suspendedSince 稳定排列——其他任务怎么变顺序都影响不到它们。
     var sortedTodos: [TodoTask] {
         todos.sorted { lhs, rhs in
             if lhs.isActive != rhs.isActive {
                 return lhs.isActive
+            }
+            if lhs.isSleeping != rhs.isSleeping {
+                return !lhs.isSleeping
             }
             return lhs.suspendedSince < rhs.suspendedSince
         }
@@ -80,9 +92,17 @@ final class AppState: ObservableObject {
         todos[idx].title = trimmed
     }
 
-    /// 选中/切换当前任务；若再次点击当前任务则取消选中（回到挂起态）
+    /// 选中/切换当前任务；若再次点击当前任务则取消选中（回到挂起态）。
+    /// 睡眠任务不能被直接激活：先按 `wakeTask` 语义唤醒，再设为当前。
     func activateTask(id: UUID) {
         let now = Date()
+
+        // 睡眠任务先唤醒（视作重新开始，避免按原创建时间被跨周自动结束）
+        if let idx = todos.firstIndex(where: { $0.id == id }), todos[idx].isSleeping {
+            todos[idx].isSleeping = false
+            todos[idx].createdAt = now
+            todos[idx].suspendedSince = now
+        }
 
         // 再次点击当前任务 → 取消选中
         if activeTaskId == id {
@@ -106,6 +126,30 @@ final class AppState: ObservableObject {
             todos[idx].isActive = true
             todos[idx].activeSince = now
         }
+    }
+
+    // MARK: - 睡眠
+
+    /// 转入睡眠：置灰并沉到列表最下方，不计时、不参与跨周自动结束。
+    /// 若它是当前任务，同时取消其「当前在做」状态，维持 isSleeping 与 isActive 互斥。
+    /// suspendedSince 保持不变，睡眠期间不影响它与其他睡眠任务的相对顺序。
+    func sleepTask(id: UUID) {
+        guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
+        todos[idx].isSleeping = true
+        if todos[idx].isActive {
+            todos[idx].isActive = false
+            todos[idx].activeSince = nil
+        }
+    }
+
+    /// 唤醒：回到挂起状态，并当作「刚刚创建」——重置 createdAt 与 suspendedSince。
+    /// 前者让它不会因原创建时间过早被跨周自动结束，后者让它按排序规则落到活跃组最下方。
+    func wakeTask(id: UUID) {
+        guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
+        let now = Date()
+        todos[idx].isSleeping = false
+        todos[idx].createdAt = now
+        todos[idx].suspendedSince = now
     }
 
     // MARK: - 子任务操作
@@ -172,12 +216,13 @@ final class AppState: ObservableObject {
 
     /// 跨自然周自动结束：创建于上一个自然周（或更早）的待办任务自动结束。
     /// 受 `autoEndEnabled` 开关控制；关闭时不做任何处理（已结束的任务不会恢复）。
+    /// 睡眠任务不参与——它们是「先放着」的任务，不该被跨周清走。
     func autoEndStaleTasks() {
         guard autoEndEnabled else { return }
         let now = Date()
-        let stale = todos.filter { AutoEndScheduler.isStale($0, now: now) }
+        let stale = todos.filter { !$0.isSleeping && AutoEndScheduler.isStale($0, now: now) }
         guard !stale.isEmpty else { return }
-        todos.removeAll(where: { AutoEndScheduler.isStale($0, now: now) })
+        todos.removeAll(where: { !$0.isSleeping && AutoEndScheduler.isStale($0, now: now) })
         for task in stale {
             completed.append(CompletedTask(id: task.id,
                                            title: task.title,

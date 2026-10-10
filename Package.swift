@@ -10,6 +10,11 @@ let package = Package(
         .executableTarget(
             name: "Attention",
             path: "Sources/Attention"
+        ),
+        .testTarget(
+            name: "AttentionTests",
+            dependencies: ["Attention"],
+            path: "Tests/AttentionTests"
         )
     ]
 )

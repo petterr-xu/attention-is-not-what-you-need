@@ -14,36 +14,55 @@ struct TaskRowView: View {
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        if isExpanded {
-            // 展开态：确认按钮留在信息行内，与子任务区共用一块底纹
-            VStack(spacing: 4) {
-                mainRow
-                subtaskSection
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(rowBackgroundColor)
+        row
+            .overlay(
+                RightClickMenuAnchor(title: task.isSleeping ? "wake up" : "sleep",
+                                     action: toggleSleep)
             )
-        } else {
-            // 收起态：确认按钮独立成块放在行尾，底纹颜色与左侧一致
-            HStack(alignment: .top, spacing: 6) {
-                mainRow
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(rowBackgroundColor)
-                    )
+    }
 
-                finishButton
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(rowBackgroundColor)
-                    )
+    /// 右键菜单动作：睡眠中 → 唤醒，否则 → 转入睡眠
+    private func toggleSleep() {
+        if task.isSleeping {
+            state.wakeTask(id: task.id)
+        } else {
+            state.sleepTask(id: task.id)
+        }
+    }
+
+    /// 行本体：展开态确认按钮留在信息行内，与子任务区共用一块底纹；
+    /// 收起态确认按钮独立成块放在行尾，底纹颜色与左侧一致。
+    private var row: some View {
+        Group {
+            if isExpanded {
+                VStack(spacing: 4) {
+                    mainRow
+                    subtaskSection
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(rowBackgroundColor)
+                )
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    mainRow
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(rowBackgroundColor)
+                        )
+
+                    finishButton
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(rowBackgroundColor)
+                        )
+                }
             }
         }
     }
@@ -70,7 +89,8 @@ struct TaskRowView: View {
                     .foregroundStyle(task.isActive ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.plain)
-            .help(task.isActive ? "点击取消当前任务" : "点击设为当前任务")
+            .help(task.isActive ? "点击取消当前任务"
+                                : (task.isSleeping ? "点击设为当前任务（自动唤醒）" : "点击设为当前任务"))
 
             // 标题 / 编辑框（点击标题展开/收起子任务）
             if isEditing {
@@ -83,7 +103,7 @@ struct TaskRowView: View {
             } else {
                 Text(task.title)
                     .fontWeight(task.isActive ? .semibold : .regular)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(task.isSleeping ? Color.secondary : Color.primary)
                     .lineLimit(isExpanded ? nil : 1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -202,13 +222,16 @@ struct TaskRowView: View {
     // MARK: - 其他
 
     private var timeText: String {
+        // 睡眠任务不计时，不显示任何累加时长
+        if task.isSleeping { return "💤" }
         let duration = task.isActive ? state.activeDuration() : state.suspendedDuration(task)
         let prefix = task.isActive ? "⏱ " : "⏸ "
         return prefix + TimeFormatter.string(from: duration)
     }
 
-    /// 行底纹：当前在做 → 淡绿，挂起 → 淡红
+    /// 行底纹：睡眠 → 灰，当前在做 → 淡绿，挂起 → 淡红
     private var rowBackgroundColor: Color {
-        task.isActive ? Color.green.opacity(0.18) : Color.red.opacity(0.12)
+        if task.isSleeping { return Color.gray.opacity(0.12) }
+        return task.isActive ? Color.green.opacity(0.18) : Color.red.opacity(0.12)
     }
 }

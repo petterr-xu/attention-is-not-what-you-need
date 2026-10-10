@@ -12,6 +12,9 @@ struct TodoTask: Identifiable, Codable, Equatable {
     var activeSince: Date?
     /// 挂起/创建开始时间（挂起时长基准）
     var suspendedSince: Date
+    /// 是否为睡眠状态：置灰并沉到列表最下方，不计时、不参与跨周自动结束。
+    /// 与 isActive 互斥。
+    var isSleeping: Bool
     /// 子任务列表（固定按添加顺序）
     var subtasks: [Subtask]
 
@@ -21,6 +24,7 @@ struct TodoTask: Identifiable, Codable, Equatable {
          isActive: Bool = false,
          activeSince: Date? = nil,
          suspendedSince: Date = Date(),
+         isSleeping: Bool = false,
          subtasks: [Subtask] = []) {
         self.id = id
         self.title = title
@@ -28,14 +32,15 @@ struct TodoTask: Identifiable, Codable, Equatable {
         self.isActive = isActive
         self.activeSince = activeSince
         self.suspendedSince = suspendedSince
+        self.isSleeping = isSleeping
         self.subtasks = subtasks
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, createdAt, isActive, activeSince, suspendedSince, subtasks
+        case id, title, createdAt, isActive, activeSince, suspendedSince, isSleeping, subtasks
     }
 
-    /// 自定义解码：subtasks 缺省为 []，兼容无子任务的旧数据
+    /// 自定义解码：subtasks 缺省为 []、isSleeping 缺省为 false，兼容旧数据
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -44,6 +49,7 @@ struct TodoTask: Identifiable, Codable, Equatable {
         isActive = try c.decode(Bool.self, forKey: .isActive)
         activeSince = try c.decodeIfPresent(Date.self, forKey: .activeSince)
         suspendedSince = try c.decode(Date.self, forKey: .suspendedSince)
+        isSleeping = try c.decodeIfPresent(Bool.self, forKey: .isSleeping) ?? false
         subtasks = try c.decodeIfPresent([Subtask].self, forKey: .subtasks) ?? []
     }
 
@@ -55,6 +61,7 @@ struct TodoTask: Identifiable, Codable, Equatable {
         try c.encode(isActive, forKey: .isActive)
         try c.encodeIfPresent(activeSince, forKey: .activeSince)
         try c.encode(suspendedSince, forKey: .suspendedSince)
+        try c.encode(isSleeping, forKey: .isSleeping)
         try c.encode(subtasks, forKey: .subtasks)
     }
 }
