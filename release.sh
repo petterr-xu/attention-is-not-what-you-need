@@ -5,6 +5,9 @@
 # 用法：
 #   ./release.sh 1.0.0             # 构建 + 打包 dmg + 创建 release（自动打 tag）
 #   ./release.sh 1.0.0 --dry-run   # 只构建打包，不上传，用于本地验证产物
+#   ./release.sh 1.0.0 --highlights-file <路径>
+#                                  # 用文件里的手写文案作为 notes 的「本次更新」段落，
+#                                  # 不传则按上一个 tag 到 HEAD 的 feat/fix/perf 提交自动生成
 #
 # 注意：本脚本只创建 tag 和 Release，不推 main 分支。
 #       发布前必须先 git push 并确认成功——gh release create 打 tag 时用的是
@@ -18,11 +21,22 @@ cd "$(dirname "$0")"
 
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
-  echo "用法: ./release.sh <版本号> [--dry-run]"
+  echo "用法: ./release.sh <版本号> [--dry-run] [--highlights-file <路径>]"
   echo "例如: ./release.sh 1.0.0"
   exit 1
 fi
-DRY_RUN="${2:-}"
+shift
+
+DRY_RUN=""
+HIGHLIGHTS_FILE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)         DRY_RUN="--dry-run" ;;
+    --highlights-file) HIGHLIGHTS_FILE="${2:-}"; shift ;;
+    *) echo "❌ 未知参数：$1"; exit 1 ;;
+  esac
+  shift
+done
 
 TAG="v$VERSION"
 DMG_NAME="Attention-$TAG.dmg"
@@ -55,14 +69,44 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
 fi
 
 echo ""
-echo "==> 创建 GitHub Release $TAG"
-gh release create "$TAG" "build/$DMG_NAME" \
-  --title "Attention $TAG" \
-  --notes "$(cat <<EOF
-## Attention $TAG
+echo "==> 汇总本次更新"
+# 默认由上一个 tag 到 HEAD 之间的 feat/fix/perf 提交自动生成；显式传 --highlights-file 时
+# 改用文件里的手写文案。两种来源都不写死进模板——写死的话，下次发版这段说明就会变陈旧、
+# 和新版本实际内容对不上。
+if [[ -n "$HIGHLIGHTS_FILE" ]]; then
+  [[ -f "$HIGHLIGHTS_FILE" ]] || { echo "❌ --highlights-file 指定的文件不存在：$HIGHLIGHTS_FILE"; exit 1; }
+  HIGHLIGHTS="$(cat "$HIGHLIGHTS_FILE")"
+else
+  PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+  RANGE="${PREV_TAG:+$PREV_TAG..HEAD}"
+  RANGE="${RANGE:-HEAD}"
+  # 去掉 feat/fix/perf 这类提交类型前缀——release notes 面向用户，不需要
+  HIGHLIGHTS="$(git log --no-merges --pretty='%s' "$RANGE" 2>/dev/null \
+    | grep -E '^(feat|fix|perf)' \
+    | sed -E 's/^(feat|fix|perf)(\([^)]*\))?: /- /' || true)"
+fi
 
-macOS 菜单栏待办应用，把「记住要做什么」这件事交给工具。
+if [[ -n "$HIGHLIGHTS" ]]; then
+  echo "$HIGHLIGHTS"
+else
+  echo "（无更新内容，本次 notes 不含「本次更新」段落）"
+fi
 
+echo ""
+echo "==> 生成 release notes"
+NOTES_FILE="build/release-notes.md"
+{
+  echo "## Attention $TAG"
+  echo
+  echo "macOS 菜单栏待办应用，把「记住要做什么」这件事交给工具。"
+  echo
+  if [[ -n "$HIGHLIGHTS" ]]; then
+    echo "### 本次更新"
+    echo
+    printf '%s\n' "$HIGHLIGHTS"
+    echo
+  fi
+  cat <<EOF
 ### 安装
 
 1. 下载 $DMG_NAME 并双击打开
@@ -86,7 +130,13 @@ macOS 菜单栏待办应用，把「记住要做什么」这件事交给工具�
 
 鼠标右击菜单栏中的 Attention 图标并选择退出，或在终端执行 \`pkill Attention\`。
 EOF
-)"
+} > "$NOTES_FILE"
+
+echo ""
+echo "==> 创建 GitHub Release $TAG"
+gh release create "$TAG" "build/$DMG_NAME" \
+  --title "Attention $TAG" \
+  --notes-file "$NOTES_FILE"
 
 echo ""
 echo "✅ 发布完成：$(gh release view "$TAG" --json url -q .url)"
