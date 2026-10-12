@@ -1,6 +1,24 @@
 import Foundation
 import Combine
 
+/// AI 通过 MCP 操作待办的权限档位。
+enum AIControlMode: String, CaseIterable {
+    /// 任何调用都被拒绝
+    case off
+    /// 只允许读（list / get）
+    case safe
+    /// 读写都允许
+    case open
+
+    var title: String {
+        switch self {
+        case .off: return "关闭"
+        case .safe: return "安全（只读）"
+        case .open: return "开放（读写）"
+        }
+    }
+}
+
 /// 全局应用状态单例：待办/已完成列表、计时、排序、持久化、自动结束。
 /// 菜单栏面板与悬浮窗共享同一个实例。
 final class AppState: ObservableObject {
@@ -22,24 +40,36 @@ final class AppState: ObservableObject {
     @Published var autoEndEnabled: Bool {
         didSet { UserDefaults.standard.set(autoEndEnabled, forKey: "autoEndEnabled") }
     }
+    /// AI 通过 MCP 操作待办的权限档位（默认关闭）
+    @Published var aiControlMode: AIControlMode {
+        didSet { UserDefaults.standard.set(aiControlMode.rawValue, forKey: Self.aiControlModeKey) }
+    }
 
     private var tickTimer: Timer?
     private var autoEndTimer: Timer?
     private var isLoading = false
     private let storageURL: URL
+    private static let aiControlModeKey = "aiControlMode"
 
     private convenience init() {
+        let defaults = UserDefaults.standard
         self.init(storageURL: Self.defaultStorageURL(),
-                  autoEndEnabled: UserDefaults.standard.object(forKey: "autoEndEnabled") as? Bool ?? true,
+                  autoEndEnabled: defaults.object(forKey: "autoEndEnabled") as? Bool ?? true,
+                  aiControlMode: defaults.string(forKey: Self.aiControlModeKey)
+                      .flatMap(AIControlMode.init(rawValue:)) ?? .off,
                   startTimers: true)
     }
 
     /// 可注入存储位置与开关的初始化入口，供测试构造隔离实例：
     /// 注入临时文件路径并跳过定时器，避免测试触碰真实用户数据与偏好设置。
-    init(storageURL: URL, autoEndEnabled: Bool, startTimers: Bool) {
+    init(storageURL: URL,
+         autoEndEnabled: Bool,
+         aiControlMode: AIControlMode = .off,
+         startTimers: Bool) {
         self.storageURL = storageURL
         showFloatingPanel = UserDefaults.standard.object(forKey: "showFloatingPanel") as? Bool ?? true
         self.autoEndEnabled = autoEndEnabled
+        self.aiControlMode = aiControlMode
         load()
         if startTimers { self.startTimers() }
     }

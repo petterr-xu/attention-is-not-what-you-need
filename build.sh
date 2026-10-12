@@ -11,15 +11,19 @@ VERSION="${VERSION:-1.0.0}"
 echo "==> 编译 release 版本..."
 swift build -c release
 
-BIN_PATH="$(swift build -c release --show-bin-path)/$EXECUTABLE"
+BIN_DIR="$(swift build -c release --show-bin-path)"
 
 APP_DIR="build/$APP_NAME.app"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/Helpers"
 
-cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
+cp "$BIN_DIR/$EXECUTABLE" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
 cp Resources/AppIcon.icns "$APP_DIR/Contents/Resources/AppIcon.icns"
+# MCP 桥接进程：由 AI 客户端按绝对路径直接 exec，放 Helpers 是 bundle 内的惯例位置。
+# 下面的 codesign --deep 会连带签它，不需要额外处理。
+cp "$BIN_DIR/attention-mcp" "$APP_DIR/Contents/Helpers/attention-mcp"
 
 cat > "$APP_DIR/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

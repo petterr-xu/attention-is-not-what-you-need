@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import AttentionControl
 
 /// 负责创建与管理悬浮窗（NSPanel）
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
+    /// 本地控制通道（供 MCP 使用）。必须持强引用，否则被释放后 socket 会静默失效。
+    private var controlServer: ControlServer?
 
     // 悬浮窗两种形态的固定尺寸
     private let expandedSize = NSSize(width: 360, height: 440)
@@ -22,7 +25,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPopover()
         setupFloatingPanel()
         observeState()
+        startControlServer()
         UpdateChecker.shared.start()
+    }
+
+    // MARK: - 本地控制通道（MCP）
+
+    /// 启动本地控制通道。
+    ///
+    /// 多实例（开发副本与已安装副本同时在跑）时第二个会 bind 失败，这里只记日志不崩溃——
+    /// app 照常可用，只是没有控制通道。
+    private func startControlServer() {
+        let server = ControlServer(handlerQueue: .main) { command in
+            // 必须在主线程执行：AppState 的所有变更都约定在主线程
+            ControlDispatcher.dispatch(command, state: AppState.shared)
+        }
+        do {
+            try server.start()
+            controlServer = server
+        } catch {
+            NSLog("[Attention] 本地控制通道启动失败，AI 接口不可用：\(error)")
+        }
     }
 
     // MARK: - 菜单栏图标与面板
@@ -89,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 检查更新 / 关于 / 退出
+        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 允许 AI 控制 / 配置 MCP 客户端 / 检查更新 / 关于 / 退出
         let floatingItem = NSMenuItem(
             title: "显示悬浮窗", action: #selector(toggleFloatingPanel), keyEquivalent: ""
         )
@@ -98,6 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(floatingItem)
 
         menu.addItem(makeAutoEndItem())
+        menu.addItem(makeAIControlItem())
+        menu.addItem(makeMCPConfigItem())
 
         let updateItem = NSMenuItem(
             title: "检查更新", action: #selector(checkForUpdates), keyEquivalent: ""
@@ -143,6 +168,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleAutoEnd() {
         AppState.shared.autoEndEnabled.toggle()
+    }
+
+    // MARK: - AI 控制（MCP）
+
+    /// 「允许 AI 控制」的三档子菜单。菜单每次右键重建，勾选态天然是最新的。
+    private func makeAIControlItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "允许 AI 控制", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for mode in AIControlMode.allCases {
+            let modeItem = NSMenuItem(title: mode.title,
+                                      action: #selector(selectAIControlMode(_:)),
+                                      keyEquivalent: "")
+            modeItem.target = self
+            modeItem.representedObject = mode.rawValue
+            modeItem.state = AppState.shared.aiControlMode == mode ? .on : .off
+            submenu.addItem(modeItem)
+        }
+        item.submenu = submenu
+        item.toolTip = "控制本机 AI 工具（通过 MCP）能对待办做什么："
+            + "「安全」只允许读取，「开放」允许读写。默认关闭。"
+        return item
+    }
+
+    @objc private func selectAIControlMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = AIControlMode(rawValue: raw) else { return }
+        AppState.shared.aiControlMode = mode
+    }
+
+    private func makeMCPConfigItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "配置 MCP 客户端…",
+                              action: #selector(showMCPConfiguration),
+                              keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    /// 桥接可执行文件的绝对路径。
+    ///
+    /// 必须由**运行中的 app 的 bundle** 现算：从 `build/Attention.app` 跑和从 `/Applications`
+    /// 跑路径不同，写死会给出一个不存在的位置。
+    private static var mcpHelperPath: String {
+        Bundle.main.bundlePath + "/Contents/Helpers/attention-mcp"
+    }
+
+    private static var mcpJSONSnippet: String {
+        """
+        {
+          "mcpServers": {
+            "attention": {
+              "type": "stdio",
+              "command": "\(mcpHelperPath)",
+              "args": []
+            }
+          }
+        }
+        """
+    }
+
+    /// Claude Code 的注册命令。`--scope user` 让它对所有项目生效——默认的 local 作用域只在
+    /// 当前项目里可用，对一个全局待办应用来说不对。
+    private static var mcpClaudeCommand: String {
+        "claude mcp add --scope user attention -- \"\(mcpHelperPath)\""
+    }
+
+    @objc private func showMCPConfiguration() {
+        let alert = NSAlert()
+        alert.messageText = "配置 MCP 客户端"
+        alert.informativeText = "把下面任一段加到你的 MCP 客户端里，AI 就能操作这个待办列表。"
+        alert.accessoryView = MCPConfigAccessoryView.make(json: Self.mcpJSONSnippet,
+                                                         command: Self.mcpClaudeCommand,
+                                                         warning: Self.helperProblem())
+        alert.addButton(withTitle: "复制 JSON 配置")
+        alert.addButton(withTitle: "复制 Claude Code 命令")
+        alert.addButton(withTitle: "关闭")
+        NSApp.activate(ignoringOtherApps: true)
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            copy(Self.mcpJSONSnippet, describedAs: "MCP 配置 JSON")
+        case .alertSecondButtonReturn:
+            copy(Self.mcpClaudeCommand, describedAs: "Claude Code 命令")
+        default:
+            break
+        }
+    }
+
+    /// helper 真有问题时才返回提示，正常路径下弹窗不掺任何噪音
+    private static func helperProblem() -> MCPConfigAccessoryView.Warning? {
+        let path = mcpHelperPath
+        if !FileManager.default.isExecutableFile(atPath: path) {
+            return .init(message: "⚠️ 包里缺少 helper——当前运行的可能是开发构建。"
+                            + "先执行 ./build.sh，或从 dmg 安装。",
+                         fixCommand: nil)
+        }
+        if isQuarantined(path) {
+            return .init(message: "⚠️ helper 带有 quarantine 标记，客户端启动它时会被 Gatekeeper 拦下。"
+                            + "在终端执行一次即可解除：",
+                         fixCommand: "xattr -dr com.apple.quarantine \"\(path)\"")
+        }
+        return nil
+    }
+
+    /// helper 是否带 quarantine 标记（从 dmg 拷出来的文件会被打上）
+    private static func isQuarantined(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let values = try? url.resourceValues(forKeys: [.quarantinePropertiesKey])
+        return values?.quarantineProperties != nil
+    }
+
+    /// 剪贴板操作本身没有任何视觉反馈，用户无法确认是否生效，所以补一句确认。
+    private func copy(_ text: String, describedAs description: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+
+        let alert = NSAlert()
+        alert.messageText = "已复制到剪贴板"
+        alert.informativeText = "\(description)已复制，粘贴到对应位置即可。"
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func toggleFloatingPanel() {
