@@ -25,8 +25,10 @@ struct SubtaskRowView: View {
 
             // 标题 / 编辑框
             if isEditing {
-                TextField("子任务名称", text: $draftTitle)
+                // 纵向自增：长标题在编辑时自动换行铺开，不用横向滚动去找
+                TextField("子任务名称", text: $draftTitle, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .lineLimit(1...)
                     .focused($nameFieldFocused)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .onSubmit(commitRename)

@@ -94,8 +94,10 @@ struct TaskRowView: View {
 
             // 标题 / 编辑框（点击标题展开/收起子任务）
             if isEditing {
-                TextField("任务名称", text: $draftTitle)
+                // 纵向自增：长标题在编辑时自动换行铺开，不用横向滚动去找
+                TextField("任务名称", text: $draftTitle, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .lineLimit(1...)
                     .focused($nameFieldFocused)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .onSubmit(commitRename)
