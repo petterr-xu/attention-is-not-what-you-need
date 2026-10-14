@@ -8,3 +8,6 @@ build/
 
 # macOS
 .DS_Store
+
+# 本地草稿（需求 spec 等，只在本机留存）
+.scratch/
