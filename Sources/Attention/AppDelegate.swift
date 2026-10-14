@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popoverSize = NSSize(width: 360, height: 440)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 通知 delegate 要在任何可能与它交互的事情之前挂上（文档要求），
+        // 而且它必须是强引用——delegate 是 weak，只放进 center 会被立刻释放。
+        AppState.shared.notifier.installDelegate()
+
         setupStatusItem()
         setupPopover()
         setupFloatingPanel()
@@ -112,7 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 允许 AI 控制 / 配置 MCP 客户端 / 检查更新 / 关于 / 退出
+        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 任务时长提醒 / 提醒阈值 / 允许 AI 控制 /
+        //       配置 MCP 客户端 / 检查更新 / 关于 / 退出
         let floatingItem = NSMenuItem(
             title: "显示悬浮窗", action: #selector(toggleFloatingPanel), keyEquivalent: ""
         )
@@ -121,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(floatingItem)
 
         menu.addItem(makeAutoEndItem())
+        menu.addItem(makeDurationAlertItem())
+        menu.addItem(makeDurationThresholdItem())
         menu.addItem(makeAIControlItem())
         menu.addItem(makeMCPConfigItem())
 
@@ -168,6 +175,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleAutoEnd() {
         AppState.shared.autoEndEnabled.toggle()
+    }
+
+    // MARK: - 任务时长提醒
+
+    /// 「任务时长提醒」开关。打开时才请求通知授权——在用户明确操作的上下文里请求是官方推荐
+    /// 的时机，也避免 app 一启动就弹权限窗骚扰。
+    private func makeDurationAlertItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "任务时长提醒",
+                              action: #selector(toggleDurationAlert),
+                              keyEquivalent: "")
+        item.target = self
+        item.state = AppState.shared.durationAlertEnabled ? .on : .off
+        item.toolTip = "挂起或执行中的任务达到设定时长后发一条系统通知；同一段状态只提醒一次。"
+            + "睡眠中的任务不参与。"
+        return item
+    }
+
+    @objc private func toggleDurationAlert() {
+        let appState = AppState.shared
+        guard !appState.durationAlertEnabled else {
+            appState.setDurationAlertEnabled(false)
+            return
+        }
+        appState.setDurationAlertEnabled(true) { [weak self] granted in
+            guard !granted else { return }
+            self?.presentNotificationPermissionHelp()
+        }
+    }
+
+    /// 权限被拒时给出可操作的出路，而不是让用户对着一个「打开了却没反应」的开关发愣。
+    private func presentNotificationPermissionHelp() {
+        let alert = NSAlert()
+        alert.messageText = "通知权限被拒绝"
+        alert.informativeText = "系统通知权限被拒绝，时长提醒发不出来。"
+            + "到「系统设置 → 通知」里为 Attention 打开通知，再回来重新打开这个开关。"
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            AppState.shared.notifier.openSystemNotificationSettings()
+        }
+    }
+
+    /// 阈值直接写在标题里，当前值随时可见。
+    private func makeDurationThresholdItem() -> NSMenuItem {
+        let minutes = AppState.shared.durationAlertThresholdMinutes
+        let item = NSMenuItem(title: "提醒阈值…（\(minutes) 分钟）",
+                              action: #selector(changeDurationThreshold),
+                              keyEquivalent: "")
+        item.target = self
+        item.toolTip = "任务挂起或执行达到该时长后提醒一次（1–\(AppState.maxDurationAlertThresholdMinutes) 分钟）"
+        return item
+    }
+
+    @objc private func changeDurationThreshold() {
+        let alert = NSAlert()
+        alert.messageText = "提醒阈值"
+        alert.informativeText = "任务挂起或执行达到该时长后提醒一次"
+            + "（单位：分钟，1–\(AppState.maxDurationAlertThresholdMinutes)）。"
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.stringValue = String(AppState.shared.durationAlertThresholdMinutes)
+        field.placeholderString = "例如 30"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field   // 打开即聚焦，省一次点击
+        NSApp.activate(ignoringOtherApps: true)
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let minutes = Int(raw),
+              minutes > 0,
+              minutes <= AppState.maxDurationAlertThresholdMinutes else {
+            presentInvalidThreshold()
+            return
+        }
+
+        AppState.shared.durationAlertThresholdMinutes = minutes
+        // 门槛变低可能让原本没超时的任务立刻超时，马上重算一次。注意已经在「已提醒」
+        // 集合里的任务不会因为门槛降了而补发——这符合「同一段状态只提醒一次」。
+        AppState.shared.evaluateDurationAlerts(firstObservation: false)
+    }
+
+    private func presentInvalidThreshold() {
+        let alert = NSAlert()
+        alert.messageText = "阈值不合法"
+        alert.informativeText = "请输入 1–\(AppState.maxDurationAlertThresholdMinutes) 之间的整数分钟。"
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     // MARK: - AI 控制（MCP）

@@ -39,17 +39,17 @@ final class AppState: ObservableObject {
     }
     /// 悬浮窗是否展示（开关）
     @Published var showFloatingPanel: Bool {
-        didSet { UserDefaults.standard.set(showFloatingPanel, forKey: "showFloatingPanel") }
+        didSet { persistPreference(showFloatingPanel, forKey: "showFloatingPanel") }
     }
     /// 悬浮窗是否折叠成小条
     @Published var isPanelCollapsed = false
     /// 是否自动结束跨自然周的待办任务（默认开启）
     @Published var autoEndEnabled: Bool {
-        didSet { UserDefaults.standard.set(autoEndEnabled, forKey: "autoEndEnabled") }
+        didSet { persistPreference(autoEndEnabled, forKey: "autoEndEnabled") }
     }
     /// AI 通过 MCP 操作待办的权限档位（默认关闭）
     @Published var aiControlMode: AIControlMode {
-        didSet { UserDefaults.standard.set(aiControlMode.rawValue, forKey: Self.aiControlModeKey) }
+        didSet { persistPreference(aiControlMode.rawValue, forKey: Self.aiControlModeKey) }
     }
     /// 「已完成列表」上次被查看的时刻。早于它的自动结束任务不再算「未查看」。
     @Published private(set) var lastCompletedViewedAt: Date {
@@ -60,12 +60,37 @@ final class AppState: ObservableObject {
     /// 用计数器而不是布尔——布尔 `true → true` 不算变化，`onChange` 不会触发，
     /// 第二次结束就不抖了。
     @Published private(set) var finishPulse = 0
+    /// 任务时长提醒开关（默认关闭）
+    @Published var durationAlertEnabled: Bool {
+        didSet { persistPreference(durationAlertEnabled, forKey: Self.durationAlertEnabledKey) }
+    }
+    /// 时长提醒阈值（分钟）
+    @Published var durationAlertThresholdMinutes: Int {
+        didSet { persistPreference(durationAlertThresholdMinutes, forKey: Self.durationAlertThresholdKey) }
+    }
 
     private var tickTimer: Timer?
     private var autoEndTimer: Timer?
+    private var durationAlertTimer: Timer?
     private var isLoading = false
     private let storageURL: URL
+    /// 是否把偏好写回 UserDefaults。
+    ///
+    /// 注入构造出来的隔离实例（`startTimers == false`，测试在用）不写——否则用例会把
+    /// 开发者**真机上**的设置改掉（比如测试里打开一次时长提醒，真机 app 就被开启了）。
+    private let persistsPreferences: Bool
+    /// 通知发送。可注入，测试用替身断言「发了什么」。
+    let notifier: NotificationPresenting
+    /// 已提醒过的「任务 + 状态段」键。
+    ///
+    /// **只放内存、不持久化**：需求要的就是「启动时发现有超时任务就发一条汇总」，
+    /// 所以每次启动重新观察一轮、重发一次汇总是预期行为；持久化反而会让第二次启动不再汇总。
+    private var alertedKeys: Set<String> = []
     private static let aiControlModeKey = "aiControlMode"
+    private static let durationAlertEnabledKey = "durationAlertEnabled"
+    private static let durationAlertThresholdKey = "durationAlertThresholdMinutes"
+    static let defaultDurationAlertThresholdMinutes = 30
+    static let maxDurationAlertThresholdMinutes = 1440
 
     private convenience init() {
         let defaults = UserDefaults.standard
@@ -73,7 +98,10 @@ final class AppState: ObservableObject {
                   autoEndEnabled: defaults.object(forKey: "autoEndEnabled") as? Bool ?? true,
                   aiControlMode: defaults.string(forKey: Self.aiControlModeKey)
                       .flatMap(AIControlMode.init(rawValue:)) ?? .off,
-                  startTimers: true)
+                  startTimers: true,
+                  durationAlertEnabled: defaults.object(forKey: Self.durationAlertEnabledKey) as? Bool ?? false,
+                  durationAlertThresholdMinutes: defaults.object(forKey: Self.durationAlertThresholdKey) as? Int
+                      ?? Self.defaultDurationAlertThresholdMinutes)
     }
 
     /// 可注入存储位置与开关的初始化入口，供测试构造隔离实例：
@@ -81,11 +109,19 @@ final class AppState: ObservableObject {
     init(storageURL: URL,
          autoEndEnabled: Bool,
          aiControlMode: AIControlMode = .off,
-         startTimers: Bool) {
+         startTimers: Bool,
+         durationAlertEnabled: Bool = false,
+         durationAlertThresholdMinutes: Int = AppState.defaultDurationAlertThresholdMinutes,
+         notifier: NotificationPresenting = SystemNotificationPresenter()) {
         self.storageURL = storageURL
+        self.notifier = notifier
+        // 注入实例（startTimers == false）视为隔离实例：偏好不落盘，避免污染真机设置
+        self.persistsPreferences = startTimers
         showFloatingPanel = UserDefaults.standard.object(forKey: "showFloatingPanel") as? Bool ?? true
         self.autoEndEnabled = autoEndEnabled
         self.aiControlMode = aiControlMode
+        self.durationAlertEnabled = durationAlertEnabled
+        self.durationAlertThresholdMinutes = durationAlertThresholdMinutes
         lastCompletedViewedAt = Date()
         load()
         if startTimers { self.startTimers() }
@@ -296,6 +332,56 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - 任务时长提醒
+
+    /// 检查并发送时长提醒。
+    ///
+    /// - Parameter firstObservation: 首次纳入观察（app 启动、或用户刚打开开关）。
+    ///   此时已有的超时任务压成**一条汇总**；运行期则是每个新跨过阈值的任务单独提醒。
+    func evaluateDurationAlerts(now: Date = Date(), firstObservation: Bool) {
+        guard durationAlertEnabled, notifier.authorizationStatus == .authorized else { return }
+
+        let candidates = DurationAlertScheduler.candidates(todos, now: now)
+        // 懒剪枝：只保留仍然有效的键。已结束/删除的任务不再派生键会被丢掉，
+        // 仍在同一状态段的键仍在派生集里、记忆不丢——不用去改 finish / delete 那些路径。
+        alertedKeys.formIntersection(Set(candidates.map(\.key)))
+
+        let threshold = TimeInterval(durationAlertThresholdMinutes * 60)
+        let fresh = candidates.filter { $0.duration >= threshold && !alertedKeys.contains($0.key) }
+        guard !fresh.isEmpty else { return }
+
+        if firstObservation {
+            // 汇总：把**每一个**超时任务的键都记下，这样 60 秒后运行期分支算出的 fresh
+            // 就是空的——天然不会「启动发过汇总、随后又逐个重发」。
+            let message = DurationAlertScheduler.summaryMessage()
+            notifier.post(title: message.title, body: message.body)
+        } else {
+            for candidate in fresh {
+                let message = DurationAlertScheduler.individualMessage(candidate)
+                notifier.post(title: message.title, body: message.body)
+            }
+        }
+        alertedKeys.formUnion(fresh.map(\.key))
+    }
+
+    /// 开关时长提醒。
+    ///
+    /// 打开时**在用户明确操作的上下文里**请求通知授权——这是官方推荐的时机，
+    /// 也避免 app 一启动就弹权限窗骚扰。completion 在主线程回调，回传最终是否开启。
+    func setDurationAlertEnabled(_ enabled: Bool, completion: ((Bool) -> Void)? = nil) {
+        guard enabled else {
+            durationAlertEnabled = false
+            completion?(true)
+            return
+        }
+        notifier.requestAuthorization { [weak self] granted in
+            guard let self else { return }
+            self.durationAlertEnabled = granted
+            if granted { self.evaluateDurationAlerts(firstObservation: true) }
+            completion?(granted)
+        }
+    }
+
     // MARK: - 持久化
 
     private struct PersistedData: Codable {
@@ -357,6 +443,12 @@ final class AppState: ObservableObject {
         lastCompletedViewedAt = persisted.lastCompletedViewedAt
     }
 
+    /// 偏好落盘的唯一出口，统一挡住隔离实例（见 `persistsPreferences`）
+    private func persistPreference(_ value: Any, forKey key: String) {
+        guard persistsPreferences else { return }
+        UserDefaults.standard.set(value, forKey: key)
+    }
+
     private func save() {
         let persisted = PersistedData(todos: todos,
                                       completed: completed,
@@ -388,7 +480,21 @@ final class AppState: ObservableObject {
         RunLoop.main.add(autoEnd, forMode: .common)
         autoEndTimer = autoEnd
 
+        // 每 60 秒检查一次任务时长提醒。不复用上面 30 秒那个纯 UI tick（职责混淆），
+        // 也不跟 autoEnd 挤一个 Timer（各自独立更好读）。
+        let alerts = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.evaluateDurationAlerts(firstObservation: false)
+        }
+        RunLoop.main.add(alerts, forMode: .common)
+        durationAlertTimer = alerts
+
         // 启动时立即检查一次
         autoEndStaleTasks()
+
+        // 启动时的时长提醒：先查授权（**只查询不弹窗**——用户上一会话已经表过态了），
+        // 拿到状态后再跑首轮汇总。
+        notifier.refreshAuthorization { [weak self] in
+            self?.evaluateDurationAlerts(firstObservation: true)
+        }
     }
 }
