@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
+    /// 「保存」被接管期间，正在编辑的时长输入视图
+    private var pendingDurationInput: DurationThresholdInputView?
     /// 本地控制通道（供 MCP 使用）。必须持强引用，否则被释放后 socket 会静默失效。
     private var controlServer: ControlServer?
 
@@ -116,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 任务时长提醒 / 提醒阈值 / 允许 AI 控制 /
+        // 顺序：显示悬浮窗 / 自动结束跨周任务 / 任务时长提醒 / 允许 AI 控制 /
         //       配置 MCP 客户端 / 检查更新 / 关于 / 退出
         let floatingItem = NSMenuItem(
             title: "显示悬浮窗", action: #selector(toggleFloatingPanel), keyEquivalent: ""
@@ -127,7 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(makeAutoEndItem())
         menu.addItem(makeDurationAlertItem())
-        menu.addItem(makeDurationThresholdItem())
         menu.addItem(makeAIControlItem())
         menu.addItem(makeMCPConfigItem())
 
@@ -179,16 +180,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 任务时长提醒
 
-    /// 「任务时长提醒」开关。打开时才请求通知授权——在用户明确操作的上下文里请求是官方推荐
-    /// 的时机，也避免 app 一启动就弹权限窗骚扰。
+    /// 「任务时长提醒」子菜单：一个开关 + 一个时长设置（与「允许 AI 控制」同为二级菜单）。
+    ///
+    /// 两项刻意分开——设置时长**不会**顺手把开关打开，也不替用户做决定。
     private func makeDurationAlertItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "任务时长提醒",
-                              action: #selector(toggleDurationAlert),
-                              keyEquivalent: "")
-        item.target = self
-        item.state = AppState.shared.durationAlertEnabled ? .on : .off
-        item.toolTip = "挂起或执行中的任务达到设定时长后发一条系统通知；同一段状态只提醒一次。"
-            + "睡眠中的任务不参与。"
+        let appState = AppState.shared
+        let item = NSMenuItem(title: "任务时长提醒", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        let toggle = NSMenuItem(title: "打开任务时长提醒",
+                                action: #selector(toggleDurationAlert),
+                                keyEquivalent: "")
+        toggle.target = self
+        toggle.state = appState.durationAlertEnabled ? .on : .off
+        submenu.addItem(toggle)
+
+        submenu.addItem(.separator())
+
+        let duration = NSMenuItem(title: "时长设置…",
+                                  action: #selector(changeDurationSetting),
+                                  keyEquivalent: "")
+        duration.target = self
+        submenu.addItem(duration)
+
+        item.submenu = submenu
+        item.toolTip = "任务挂起或执行达到该时长后提醒一次；同一段状态只提醒一次，睡眠中的任务不参与。"
+            + "\n当前：\(DurationAlertScheduler.describe(minutes: appState.durationAlertThresholdMinutes))"
+            + (appState.durationAlertEnabled ? "" : "（提醒已关闭）")
         return item
     }
 
@@ -202,6 +220,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !granted else { return }
             self?.presentNotificationPermissionHelp()
         }
+    }
+
+    /// 「时长设置…」：只改时长。开关没开的话**不替用户打开**，保存后提示去菜单里打开。
+    @objc private func changeDurationSetting() {
+        let appState = AppState.shared
+        guard let minutes = promptForDuration(prefill: appState.durationAlertThresholdMinutes) else {
+            return   // 取消
+        }
+        appState.setDurationAlertThreshold(minutes: minutes)
+        guard !appState.durationAlertEnabled else { return }
+        presentEnableHint()
+    }
+
+    private func presentEnableHint() {
+        let alert = NSAlert()
+        alert.messageText = "时长已保存"
+        alert.informativeText = "不过「任务时长提醒」现在是关闭状态，"
+            + "去「任务时长提醒 → 打开任务时长提醒」打开它才会生效。"
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     /// 权限被拒时给出可操作的出路，而不是让用户对着一个「打开了却没反应」的开关发愣。
@@ -218,55 +257,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 阈值直接写在标题里，当前值随时可见。
-    private func makeDurationThresholdItem() -> NSMenuItem {
-        let minutes = AppState.shared.durationAlertThresholdMinutes
-        let item = NSMenuItem(title: "提醒阈值…（\(minutes) 分钟）",
-                              action: #selector(changeDurationThreshold),
-                              keyEquivalent: "")
-        item.target = self
-        item.toolTip = "任务挂起或执行达到该时长后提醒一次（1–\(AppState.maxDurationAlertThresholdMinutes) 分钟）"
-        return item
-    }
+    /// 让用户填提醒时长。返回 nil 表示取消。
+    ///
+    /// 「保存」的 action 被我们接管了：输入不合法时**不结束模态**，弹窗留在原地、出错的框标红
+    /// （实时校验本来就在做，这里是兜底）。接管之后 NSAlert 自己的处理器不跑，
+    /// 模态得靠 `stopModal` 自己收尾。
+    private func promptForDuration(prefill: Int) -> Int? {
+        let parts = DurationAlertScheduler.split(minutes: prefill)
+        let input = DurationThresholdInputView(days: parts.days,
+                                               hours: parts.hours,
+                                               minutes: parts.minutes)
 
-    @objc private func changeDurationThreshold() {
         let alert = NSAlert()
-        alert.messageText = "提醒阈值"
+        alert.messageText = "任务时长提醒"
         alert.informativeText = "任务挂起或执行达到该时长后提醒一次"
-            + "（单位：分钟，1–\(AppState.maxDurationAlertThresholdMinutes)）。"
-
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.stringValue = String(AppState.shared.durationAlertThresholdMinutes)
-        field.placeholderString = "例如 30"
-        alert.accessoryView = field
+        alert.accessoryView = input
         alert.addButton(withTitle: "保存")
         alert.addButton(withTitle: "取消")
-        alert.window.initialFirstResponder = field   // 打开即聚焦，省一次点击
+        alert.window.initialFirstResponder = input.firstField   // 打开即聚焦，省一次点击
+        alert.buttons[0].target = self
+        alert.buttons[0].action = #selector(confirmDuration(_:))
+
+        pendingDurationInput = input
         NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        pendingDurationInput = nil
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let minutes = Int(raw),
-              minutes > 0,
-              minutes <= AppState.maxDurationAlertThresholdMinutes else {
-            presentInvalidThreshold()
-            return
-        }
-
-        AppState.shared.durationAlertThresholdMinutes = minutes
-        // 门槛变低可能让原本没超时的任务立刻超时，马上重算一次。注意已经在「已提醒」
-        // 集合里的任务不会因为门槛降了而补发——这符合「同一段状态只提醒一次」。
-        AppState.shared.evaluateDurationAlerts(firstObservation: false)
+        return response == .alertFirstButtonReturn ? input.totalMinutes : nil
     }
 
-    private func presentInvalidThreshold() {
-        let alert = NSAlert()
-        alert.messageText = "阈值不合法"
-        alert.informativeText = "请输入 1–\(AppState.maxDurationAlertThresholdMinutes) 之间的整数分钟。"
-        alert.addButton(withTitle: "好")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+    /// 接管后的「保存」：校验通过才结束模态，否则把出错的框标红、窗口不关
+    @objc private func confirmDuration(_ sender: Any?) {
+        guard let input = pendingDurationInput else { return }
+        guard input.validationError == nil else {
+            input.refreshValidation()
+            return
+        }
+        NSApp.stopModal(withCode: .alertFirstButtonReturn)
     }
 
     // MARK: - AI 控制（MCP）

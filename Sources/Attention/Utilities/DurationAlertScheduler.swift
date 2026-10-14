@@ -31,6 +31,22 @@ enum DurationAlertScheduler {
     /// 通知里任务名最多显示多少个字符
     static let taskTitleCharacterLimit = 20
 
+    /// 把总分钟数拆成「天 / 小时 / 分钟」，供配置弹窗回填
+    static func split(minutes total: Int) -> (days: Int, hours: Int, minutes: Int) {
+        let clamped = max(0, total)
+        return (clamped / 1440, (clamped % 1440) / 60, clamped % 60)
+    }
+
+    /// 配置的可读描述，例如「1 天 12 小时」「30 分钟」
+    static func describe(minutes total: Int) -> String {
+        let parts = split(minutes: total)
+        var chunks: [String] = []
+        if parts.days > 0 { chunks.append("\(parts.days) 天") }
+        if parts.hours > 0 { chunks.append("\(parts.hours) 小时") }
+        if parts.minutes > 0 || chunks.isEmpty { chunks.append("\(parts.minutes) 分钟") }
+        return chunks.joined(separator: " ")
+    }
+
     /// 派生当前所有候选。**睡眠任务被排除**。
     static func candidates(_ tasks: [TodoTask], now: Date) -> [Candidate] {
         tasks.compactMap { task in

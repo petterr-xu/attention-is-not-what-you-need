@@ -244,7 +244,7 @@ final class DurationAlertTests {
 
     @Test("打开开关且授权通过时，立刻跑一次首轮汇总")
     func enablingRunsFirstObservation() {
-        seed("晾了 3 小时的", minutesAgo: 180)
+        seed("晾了很久的", minutesAgo: 180)
 
         state.setDurationAlertEnabled(true)
 
@@ -253,13 +253,34 @@ final class DurationAlertTests {
         #expect(spy.posted.first?.title == "有些事情似乎已经忘了")
     }
 
-    @Test("关闭开关是幂等的")
+    @Test("保存时长设置不会顺手把开关打开")
+    func settingThresholdDoesNotEnable() {
+        state.setDurationAlertEnabled(false)
+
+        state.setDurationAlertThreshold(minutes: 36 * 60)
+
+        #expect(state.durationAlertThresholdMinutes == 36 * 60)
+        #expect(state.durationAlertEnabled == false, "设置时长不该替用户做打开的决定")
+        #expect(spy.requestCount == 0, "设置时长不该请求通知授权")
+    }
+
+    @Test("关闭时保留时长配置，下次打开还是原来那个值")
+    func disablingKeepsThreshold() {
+        state.setDurationAlertThreshold(minutes: 5 * 60)
+        state.setDurationAlertEnabled(false)
+
+        #expect(state.durationAlertEnabled == false)
+        #expect(state.durationAlertThresholdMinutes == 5 * 60, "关一次不该把配好的时长弄丢")
+        #expect(spy.requestCount == 0, "关闭不该去请求授权")
+    }
+
+    @Test("关闭是幂等的")
     func disablingIsIdempotent() {
         state.setDurationAlertEnabled(false)
         state.setDurationAlertEnabled(false)
 
         #expect(state.durationAlertEnabled == false)
-        #expect(spy.requestCount == 0, "关闭不该去请求授权")
+        #expect(spy.requestCount == 0)
     }
 }
 
@@ -324,5 +345,49 @@ struct DurationAlertFormattingTests {
         #expect(candidates.first { $0.title == "执行中" }?.phase == .active)
         #expect(candidates.first { $0.title == "挂起" }?.phase == .suspended)
         #expect(candidates.contains { $0.title == "睡眠" } == false)
+    }
+}
+
+@Suite("任务时长展示")
+struct DurationDisplayTests {
+    @Test("一天以内保持 h / m 写法")
+    func withinOneDay() {
+        #expect(TimeFormatter.string(from: 0) == "0m")
+        #expect(TimeFormatter.string(from: 40 * 60) == "40m")
+        #expect(TimeFormatter.string(from: 135 * 60) == "2h 15m")
+        // 正好一天仍走 h/m：规则是「**超过**一天」才换单位
+        #expect(TimeFormatter.string(from: 24 * 3600) == "24h 0m")
+    }
+
+    @Test("超过一天按 xx.x day 显示")
+    func beyondOneDay() {
+        #expect(TimeFormatter.string(from: 24 * 3600 + 1) == "1.0 day")
+        #expect(TimeFormatter.string(from: 36 * 3600) == "1.5 day")
+        #expect(TimeFormatter.string(from: 29.9 * 86400) == "29.9 day")
+    }
+
+    @Test("超过 29.9 天按 xx.x month 显示")
+    func beyondAMonth() {
+        #expect(TimeFormatter.string(from: 30 * 86400) == "1.0 month")
+        #expect(TimeFormatter.string(from: 357 * 86400) == "11.9 month")   // 11.9 个月 = 357 天
+    }
+
+    @Test("再长就直接摆烂")
+    func absurdlyLong() {
+        #expect(TimeFormatter.string(from: 358 * 86400) == ":(")
+        #expect(TimeFormatter.string(from: 3650 * 86400) == ":(")
+    }
+
+    @Test("天 / 小时 / 分钟的拆分与回填")
+    func splitAndDescribe() {
+        let parts = DurationAlertScheduler.split(minutes: 36 * 60)
+        #expect(parts.days == 1)
+        #expect(parts.hours == 12)
+        #expect(parts.minutes == 0)
+
+        #expect(DurationAlertScheduler.describe(minutes: 36 * 60) == "1 天 12 小时")
+        #expect(DurationAlertScheduler.describe(minutes: 90) == "1 小时 30 分钟")
+        #expect(DurationAlertScheduler.describe(minutes: 30) == "30 分钟")
+        #expect(DurationAlertScheduler.describe(minutes: 0) == "0 分钟")
     }
 }

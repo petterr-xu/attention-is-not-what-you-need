@@ -89,8 +89,10 @@ final class AppState: ObservableObject {
     private static let aiControlModeKey = "aiControlMode"
     private static let durationAlertEnabledKey = "durationAlertEnabled"
     private static let durationAlertThresholdKey = "durationAlertThresholdMinutes"
-    static let defaultDurationAlertThresholdMinutes = 30
-    static let maxDurationAlertThresholdMinutes = 1440
+    /// 默认 36 小时。任务生命周期可以拉到天级（跨周自动结束能关、阈值也能配到天），
+    /// 默认值跟着按天来。
+    static let defaultDurationAlertThresholdMinutes = 36 * 60
+    static let maxDurationAlertThresholdMinutes = 60 * 1440 + 24 * 60 + 60
 
     private convenience init() {
         let defaults = UserDefaults.standard
@@ -99,7 +101,7 @@ final class AppState: ObservableObject {
                   aiControlMode: defaults.string(forKey: Self.aiControlModeKey)
                       .flatMap(AIControlMode.init(rawValue:)) ?? .off,
                   startTimers: true,
-                  durationAlertEnabled: defaults.object(forKey: Self.durationAlertEnabledKey) as? Bool ?? false,
+                  durationAlertEnabled: defaults.object(forKey: Self.durationAlertEnabledKey) as? Bool ?? true,
                   durationAlertThresholdMinutes: defaults.object(forKey: Self.durationAlertThresholdKey) as? Int
                       ?? Self.defaultDurationAlertThresholdMinutes)
     }
@@ -110,7 +112,7 @@ final class AppState: ObservableObject {
          autoEndEnabled: Bool,
          aiControlMode: AIControlMode = .off,
          startTimers: Bool,
-         durationAlertEnabled: Bool = false,
+         durationAlertEnabled: Bool = true,
          durationAlertThresholdMinutes: Int = AppState.defaultDurationAlertThresholdMinutes,
          notifier: NotificationPresenting = SystemNotificationPresenter()) {
         self.storageURL = storageURL
@@ -366,8 +368,9 @@ final class AppState: ObservableObject {
 
     /// 开关时长提醒。
     ///
-    /// 打开时**在用户明确操作的上下文里**请求通知授权——这是官方推荐的时机，
-    /// 也避免 app 一启动就弹权限窗骚扰。completion 在主线程回调，回传最终是否开启。
+    /// 打开时**在用户明确操作的上下文里**请求通知授权（官方推荐的时机）。
+    /// completion 在主线程回调，回传最终是否开启——没通过时调用方要给出「去系统设置」的出路。
+    /// 关闭不动时长配置，下次打开还是原来那个值。
     func setDurationAlertEnabled(_ enabled: Bool, completion: ((Bool) -> Void)? = nil) {
         guard enabled else {
             durationAlertEnabled = false
@@ -380,6 +383,14 @@ final class AppState: ObservableObject {
             if granted { self.evaluateDurationAlerts(firstObservation: true) }
             completion?(granted)
         }
+    }
+
+    /// 保存时长设置。**不改变开关状态**——开关是子菜单里独立的另一项，不替用户做决定。
+    func setDurationAlertThreshold(minutes: Int) {
+        durationAlertThresholdMinutes = minutes
+        // 门槛变低可能让原本没超时的任务立刻超时，马上重算一次。注意已经在「已提醒」集合里的
+        // 任务不会因为门槛降了而补发——这符合「同一段状态只提醒一次」。
+        evaluateDurationAlerts(firstObservation: false)
     }
 
     // MARK: - 持久化
@@ -491,10 +502,20 @@ final class AppState: ObservableObject {
         // 启动时立即检查一次
         autoEndStaleTasks()
 
-        // 启动时的时长提醒：先查授权（**只查询不弹窗**——用户上一会话已经表过态了），
-        // 拿到状态后再跑首轮汇总。
+        // 启动时的时长提醒：先查授权（只查询、不弹窗），再按状态决定要不要补申请。
+        //
+        // 提醒**默认就是开启的**，如果从没问过用户（notDetermined），那道
+        // `authorizationStatus == .authorized` 的守卫会让功能一路静默失效、用户还莫名其妙。
+        // 所以这里补一次申请——既然默认开着，用户等于已经默认选择过了。
         notifier.refreshAuthorization { [weak self] in
-            self?.evaluateDurationAlerts(firstObservation: true)
+            guard let self else { return }
+            guard self.durationAlertEnabled, self.notifier.authorizationStatus == .notDetermined else {
+                self.evaluateDurationAlerts(firstObservation: true)
+                return
+            }
+            self.notifier.requestAuthorization { _ in
+                self.evaluateDurationAlerts(firstObservation: true)
+            }
         }
     }
 }
