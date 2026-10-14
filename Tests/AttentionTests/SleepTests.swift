@@ -83,7 +83,7 @@ final class SleepTests {
         #expect(titles().last == "A")
         state.activateTask(id: stored("B").id)
         #expect(titles().last == "A")
-        state.finishTask(id: stored("B").id)
+        state.finishTask(id: stored("B").id, source: .ai)   // 本用例不关心抖动来源
         #expect(titles().last == "A")
     }
 

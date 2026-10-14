@@ -6,6 +6,8 @@ struct TodoListView: View {
     @EnvironmentObject var state: AppState
     @State private var newTitle = ""
     @State private var showCompleted = false
+    /// 抖动进度：整数脉冲驱动，每次 +1 就是一次抖动
+    @State private var shakeTrigger: CGFloat = 0
     /// 是否显示底部「悬浮窗开关」（悬浮窗内不重复显示）
     var showsPanelToggle: Bool = true
     /// 是否显示标题栏折叠按钮（仅悬浮窗内显示）
@@ -33,9 +35,14 @@ struct TodoListView: View {
                 Spacer()
                 Button {
                     showCompleted.toggle()
+                    // 进入时清红点。改成「离开时清」会把查看期间新到的自动结束一并吞掉
+                    if showCompleted { state.markCompletedViewed() }
                 } label: {
                     Image(systemName: showCompleted ? "chevron.left" : "checkmark.circle")
                         .font(.callout)
+                        .modifier(ShakeEffect(progress: shakeTrigger))
+                        // overlay 写在 ShakeEffect 之后 → 红点不跟着抖
+                        .overlay(alignment: .topTrailing) { unseenAutoEndDot }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -105,6 +112,27 @@ struct TodoListView: View {
             }
         }
         .frame(width: 360, height: 440)
+        // 用户每手动结束一个任务就抖一次。用脉冲计数器而不是布尔：
+        // 布尔 true→true 不算变化，onChange 不触发，第二次结束就不抖了。
+        .onChange(of: state.finishPulse) { _ in
+            withAnimation(.easeOut(duration: 0.5)) { shakeTrigger += 1 }
+        }
+    }
+
+    /// 有未查看的跨周自动结束任务时，在入口图标上点一颗红点。
+    /// 照 updateBadge 的范式：无提示时不渲染任何内容，因此不影响原有布局。
+    @ViewBuilder
+    private var unseenAutoEndDot: some View {
+        // 已完成页里用户正看着内容，红点是噪音
+        if !showCompleted && state.hasUnseenAutoEnd {
+            Circle()
+                .fill(Color.red)
+                .frame(width: 6, height: 6)
+                // 偏移取 (1, -1) 而不是更靠外：再往外就飘成一颗「散落的点」，
+                // 再往里会盖住图标本体，这个位置刚好贴着图标右上边缘
+                .offset(x: 1, y: -1)
+                .help("有跨周自动结束的任务，点进「已完成」查看")
+        }
     }
 
     /// 有新版本时的提示图标。界面上不出现文字，版本号通过悬停提示给出。

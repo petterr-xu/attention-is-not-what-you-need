@@ -19,6 +19,13 @@ enum AIControlMode: String, CaseIterable {
     }
 }
 
+/// 结束任务的来源。只有用户自己点的才驱动入口图标抖动。
+enum FinishSource {
+    case user
+    /// 经 MCP 接口由 AI 触发
+    case ai
+}
+
 /// 全局应用状态单例：待办/已完成列表、计时、排序、持久化、自动结束。
 /// 菜单栏面板与悬浮窗共享同一个实例。
 final class AppState: ObservableObject {
@@ -44,6 +51,15 @@ final class AppState: ObservableObject {
     @Published var aiControlMode: AIControlMode {
         didSet { UserDefaults.standard.set(aiControlMode.rawValue, forKey: Self.aiControlModeKey) }
     }
+    /// 「已完成列表」上次被查看的时刻。早于它的自动结束任务不再算「未查看」。
+    @Published private(set) var lastCompletedViewedAt: Date {
+        didSet { if !isLoading { save() } }
+    }
+    /// 用户手动结束任务的脉冲：每次 +1，供入口图标做抖动反馈。不持久化。
+    ///
+    /// 用计数器而不是布尔——布尔 `true → true` 不算变化，`onChange` 不会触发，
+    /// 第二次结束就不抖了。
+    @Published private(set) var finishPulse = 0
 
     private var tickTimer: Timer?
     private var autoEndTimer: Timer?
@@ -70,6 +86,7 @@ final class AppState: ObservableObject {
         showFloatingPanel = UserDefaults.standard.object(forKey: "showFloatingPanel") as? Bool ?? true
         self.autoEndEnabled = autoEndEnabled
         self.aiControlMode = aiControlMode
+        lastCompletedViewedAt = Date()
         load()
         if startTimers { self.startTimers() }
     }
@@ -93,6 +110,15 @@ final class AppState: ObservableObject {
             }
             return lhs.suspendedSince < rhs.suspendedSince
         }
+    }
+
+    /// 是否存在「尚未查看」的跨周自动结束任务 → 入口图标上的红点。
+    ///
+    /// 刻意做成派生属性而不是一个标志位：启动时 `startTimers()` 会**立即**跑一次
+    /// `autoEndStaleTasks()`，那一刻任何视图都还不存在——若是靠脉冲/`onChange` 去点亮，
+    /// 这一波会永久丢失。派生则永远和 `completed` 保持一致，不会漂移。
+    var hasUnseenAutoEnd: Bool {
+        completed.contains { $0.autoEnded && $0.finishedAt > lastCompletedViewedAt }
     }
 
     /// 当前任务的单次会话时长
@@ -214,8 +240,9 @@ final class AppState: ObservableObject {
         todos[pi].subtasks[si].isDone.toggle()
     }
 
-    /// 结束任务 → 进入已完成列表（子任务跟随）
-    func finishTask(id: UUID) {
+    /// 结束任务 → 进入已完成列表（子任务跟随）。
+    /// `source == .user` 时脉冲 +1，驱动入口图标抖动——只有用户自己点才抖。
+    func finishTask(id: UUID, source: FinishSource) {
         guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
         let task = todos.remove(at: idx)
         completed.append(CompletedTask(id: task.id,
@@ -224,6 +251,12 @@ final class AppState: ObservableObject {
                                        finishedAt: Date(),
                                        autoEnded: false,
                                        subtasks: task.subtasks))
+        if source == .user { finishPulse += 1 }
+    }
+
+    /// 查看已完成列表：清掉入口图标上的红点。唯一的写入点。
+    func markCompletedViewed() {
+        lastCompletedViewedAt = Date()
     }
 
     /// 删除任务 → 彻底移除（不进入已完成列表）
@@ -268,6 +301,29 @@ final class AppState: ObservableObject {
     private struct PersistedData: Codable {
         var todos: [TodoTask]
         var completed: [CompletedTask]
+        /// 「已完成列表」上次被查看的时刻，用来判断红点
+        var lastCompletedViewedAt: Date
+
+        // 一旦写了任何一个 init，成员初始化器就不再合成，而 save() 正在用它——必须显式补上
+        init(todos: [TodoTask], completed: [CompletedTask], lastCompletedViewedAt: Date) {
+            self.todos = todos
+            self.completed = completed
+            self.lastCompletedViewedAt = lastCompletedViewedAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case todos, completed, lastCompletedViewedAt
+        }
+
+        /// 兼容旧数据：缺字段时默认「此刻」——升级前早就存在的自动结束任务
+        /// 不该背着一颗红点，否则用户会看到一颗不知道指向什么的提示。
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            todos = try container.decode([TodoTask].self, forKey: .todos)
+            completed = try container.decode([CompletedTask].self, forKey: .completed)
+            lastCompletedViewedAt = try container.decodeIfPresent(Date.self,
+                                                                  forKey: .lastCompletedViewedAt) ?? Date()
+        }
     }
 
     private static func defaultStorageURL() -> URL {
@@ -296,10 +352,15 @@ final class AppState: ObservableObject {
             return task
         }
         completed = persisted.completed
+        // 回填水位线。这一步漏了编译器不会报错（属性有初值），
+        // 结果是红点对所有自动结束任务常亮——最容易漏、后果最明显的一步。
+        lastCompletedViewedAt = persisted.lastCompletedViewedAt
     }
 
     private func save() {
-        let persisted = PersistedData(todos: todos, completed: completed)
+        let persisted = PersistedData(todos: todos,
+                                      completed: completed,
+                                      lastCompletedViewedAt: lastCompletedViewedAt)
         do {
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)

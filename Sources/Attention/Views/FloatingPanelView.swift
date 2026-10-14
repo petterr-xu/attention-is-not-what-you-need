@@ -21,11 +21,24 @@ struct FloatingPanelView: View {
             .foregroundStyle(.primary)
             .frame(width: 40, height: 40)
             .background(Circle().fill(.regularMaterial))
+            .overlay(alignment: .topTrailing) { unseenAutoEndDot }
             .contentShape(Circle())
             .onTapGesture {
                 state.isPanelCollapsed = false
             }
             .help("点击展开，拖动移动")
+    }
+
+    /// 折叠成小浮标时也要能看到有未查看的自动结束任务——
+    /// 这里渲染的不是 TodoListView，红点得单独加一份。
+    @ViewBuilder
+    private var unseenAutoEndDot: some View {
+        if state.hasUnseenAutoEnd {
+            Circle()
+                .fill(Color.red)
+                .frame(width: 8, height: 8)
+                .offset(x: -4, y: 4)
+        }
     }
 }
 

@@ -83,7 +83,8 @@ enum ControlDispatcher {
 
         case .finishTask(let id):
             guard state.todos.contains(where: { $0.id == id }) else { return notFound("待办", id) }
-            state.finishTask(id: id)
+            // 来源是 AI：不驱动入口图标抖动（用户没做任何操作时图标不该自己动）
+            state.finishTask(id: id, source: .ai)
             return .ok
 
         case .restoreTask(let id):

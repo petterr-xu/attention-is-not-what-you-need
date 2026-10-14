@@ -70,7 +70,7 @@ struct TaskRowView: View {
     /// 结束任务按钮本体，外层容器由 body 按展开状态决定
     private var finishButton: some View {
         Button {
-            state.finishTask(id: task.id)
+            state.finishTask(id: task.id, source: .user)
         } label: {
             Image(systemName: "checkmark.circle")
                 .foregroundStyle(.secondary)
