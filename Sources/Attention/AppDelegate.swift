@@ -546,9 +546,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // 两个 sink 都**延后一个 runloop turn** 再改窗口，别在 willSet 里同步改。
+        //
+        // `@Published` 是在 willSet 里投递的，此刻 SwiftUI 还没换内容，而 `NSHostingView`
+        // 作为 contentView 会让窗口尺寸受**内容固有尺寸**约束（收起态内容硬约束 40×40，
+        // 展开态有个最小尺寸）。同步 setFrame 于是按旧内容把窗口摆一次、随即被宿主视图弹回
+        // 去，还连带把内容切换推迟到下一次事件——表现就是「点一下状态变了、画面没动，
+        // 再点一下才变」。延后约 16ms（肉眼不可见）后内容已换好，两边一致。
+        //
+        // size 一律用投递过来的值：延后之后回读 AppState 虽然也能拿到新值，
+        // 但显式传值不受投递语义影响，写死这条更稳。
         AppState.shared.$isPanelCollapsed
-            .sink { [weak self] _ in
-                self?.updatePanelSize()
+            .sink { [weak self] isCollapsed in
+                DispatchQueue.main.async { self?.updatePanelSize(isCollapsed: isCollapsed) }
+            }
+            .store(in: &cancellables)
+
+        AppState.shared.$floatingPanelSize
+            .sink { [weak self] size in
+                DispatchQueue.main.async { self?.updatePanelSize(size: size) }
             }
             .store(in: &cancellables)
     }
@@ -578,6 +594,32 @@ extension AppDelegate: NSWindowDelegate {
 /// 让窗口背景可拖动（配合 isMovableByWindowBackground，系统级逐帧平滑拖动）
 final class DraggableHostingView<Content: View>: NSHostingView<Content> {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    /// 接受**非 key 窗口的第一次点击**（配合下面的 `hitTest` 一起生效）。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// 让**窗口不是 key 时的第一次点击**也真正生效。
+    ///
+    /// 面板是 nonactivatingPanel：点它不激活 App，窗口平时不是 key。而 AppKit 对非 key 窗口的
+    /// 第一次点击只用来「把窗口变成 key」；是否同时派发给视图，**只问 hit test 命中的那一个
+    /// 视图**的 `acceptsFirstMouse`（不是第一响应者，也不是父视图链）。
+    ///
+    /// 而 SwiftUI 会把内容落成自己的 AppKit 子视图，它们 `acceptsFirstMouse` 都是默认的
+    /// false——实测折叠按钮和任务行的命中是 `NSVisualEffectView` / `NSClipView`，列表空白处是
+    /// `PlatformGroupContainer`（标题文字、部分行内按钮恰好命中宿主视图，那些位置一直是灵的）。
+    /// 第一次点击于是被吞掉，表现为「点第一下没反应，点第二下才行」。
+    ///
+    /// 所以把这种点击的命中**落回宿主视图自己**：它与「内容里没有 AppKit 子视图」时 AppKit
+    /// 的正常命中结果一致，SwiftUI 再按自己的布局把事件分发给手势/输入框。只拦这一种情况
+    /// （非 key + 左键按下 + 命中视图自己拒绝）：滚轮与拖拽仍走原来的命中视图，缩放手柄和
+    /// 输入框本来就接受第一次点击，会被 guard 放过。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        guard !(window?.isKeyWindow ?? true),
+              let event = NSApp.currentEvent, event.type == .leftMouseDown,
+              let hit, !hit.acceptsFirstMouse(for: event) else { return hit }
+        return self
+    }
 }
 
 // MARK: - 可成为 Key 的悬浮面板
