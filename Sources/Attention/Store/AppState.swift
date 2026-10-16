@@ -43,6 +43,13 @@ final class AppState: ObservableObject {
     }
     /// 悬浮窗是否折叠成小条
     @Published var isPanelCollapsed = false
+    /// 悬浮窗展开时的期望尺寸（用户可拖右下角手柄调）。菜单栏面板另有固定尺寸，不受影响。
+    ///
+    /// 这里存的是「期望尺寸」这个偏好；真正把它套到窗口上是 AppDelegate 的事——
+    /// 与 `isPanelCollapsed` 同为「状态在这里、窗口变形在 AppDelegate」的分工。
+    @Published private(set) var floatingPanelSize: NSSize {
+        didSet { persistFloatingPanelSize() }
+    }
     /// 是否自动结束跨自然周的待办任务（默认开启）
     @Published var autoEndEnabled: Bool {
         didSet { persistPreference(autoEndEnabled, forKey: "autoEndEnabled") }
@@ -89,6 +96,8 @@ final class AppState: ObservableObject {
     private static let aiControlModeKey = "aiControlMode"
     private static let durationAlertEnabledKey = "durationAlertEnabled"
     private static let durationAlertThresholdKey = "durationAlertThresholdMinutes"
+    private static let panelWidthKey = "floatingPanelWidth"
+    private static let panelHeightKey = "floatingPanelHeight"
     /// 默认 36 小时。任务生命周期可以拉到天级（跨周自动结束能关、阈值也能配到天），
     /// 默认值跟着按天来。
     static let defaultDurationAlertThresholdMinutes = 36 * 60
@@ -114,6 +123,7 @@ final class AppState: ObservableObject {
          startTimers: Bool,
          durationAlertEnabled: Bool = true,
          durationAlertThresholdMinutes: Int = AppState.defaultDurationAlertThresholdMinutes,
+         floatingPanelSize: NSSize = AppState.loadFloatingPanelSize(),
          notifier: NotificationPresenting = SystemNotificationPresenter()) {
         self.storageURL = storageURL
         self.notifier = notifier
@@ -124,6 +134,8 @@ final class AppState: ObservableObject {
         self.aiControlMode = aiControlMode
         self.durationAlertEnabled = durationAlertEnabled
         self.durationAlertThresholdMinutes = durationAlertThresholdMinutes
+        // 注入进来的值也过一遍钳制，脏数据（越界 / NaN）在这里就被挡掉
+        self.floatingPanelSize = PanelGeometry.clamp(floatingPanelSize)
         lastCompletedViewedAt = Date()
         load()
         if startTimers { self.startTimers() }
@@ -458,6 +470,32 @@ final class AppState: ObservableObject {
     private func persistPreference(_ value: Any, forKey key: String) {
         guard persistsPreferences else { return }
         UserDefaults.standard.set(value, forKey: key)
+    }
+
+    // MARK: - 悬浮窗尺寸
+
+    /// 读回上次的悬浮窗尺寸。缺失或脏数据（非正 / 非有限）一律退回默认，并过一遍钳制。
+    static func loadFloatingPanelSize() -> NSSize {
+        let defaults = UserDefaults.standard
+        let width = defaults.object(forKey: panelWidthKey) as? Double ?? 0
+        let height = defaults.object(forKey: panelHeightKey) as? Double ?? 0
+        guard width > 0, height > 0 else { return PanelGeometry.defaultSize }
+        return PanelGeometry.clamp(NSSize(width: width, height: height))
+    }
+
+    /// 调节悬浮窗尺寸。钳到合法区间；值没变就早退，不用白落一次盘。
+    ///
+    /// 这里存的是**用户想要的尺寸**，只按 `minSize`/`maxSize` 钳；按当前屏幕再钳一次是
+    /// `AppDelegate` 应用窗口时的事（大屏上调过的尺寸换到小屏不该被改写掉）。
+    func resizeFloatingPanel(to size: NSSize) {
+        let clamped = PanelGeometry.clamp(size)
+        guard clamped != floatingPanelSize else { return }
+        floatingPanelSize = clamped
+    }
+
+    private func persistFloatingPanelSize() {
+        persistPreference(Double(floatingPanelSize.width), forKey: Self.panelWidthKey)
+        persistPreference(Double(floatingPanelSize.height), forKey: Self.panelHeightKey)
     }
 
     private func save() {

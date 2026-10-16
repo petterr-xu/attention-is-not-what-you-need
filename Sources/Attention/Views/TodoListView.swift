@@ -12,9 +12,33 @@ struct TodoListView: View {
     var showsPanelToggle: Bool = true
     /// 是否显示标题栏折叠按钮（仅悬浮窗内显示）
     var showsCollapseButton: Bool = false
+    /// 固定尺寸：菜单栏面板用（与 `popover.contentSize` 一致，不改）。悬浮窗传 nil，
+    /// 让内容铺满窗口——窗口尺寸由 `AppState.floatingPanelSize` 决定，用户可以拖手柄调。
+    var fixedSize: NSSize? = NSSize(width: 360, height: 440)
+
+    /// 右下角缩放手柄占的横向空间（手柄 18 + 左右各 6 的 padding），底部行要给它让位
+    private static let resizeHandleFootprint: CGFloat = 30
     @ObservedObject private var updateChecker = UpdateChecker.shared
 
     var body: some View {
+        sizedContent
+            // 用户每手动结束一个任务就抖一次。用脉冲计数器而不是布尔：
+            // 布尔 true→true 不算变化，onChange 不触发，第二次结束就不抖了。
+            .onChange(of: state.finishPulse) { _ in
+                withAnimation(.easeOut(duration: 0.5)) { shakeTrigger += 1 }
+            }
+    }
+
+    @ViewBuilder
+    private var sizedContent: some View {
+        if let fixedSize {
+            content.frame(width: fixedSize.width, height: fixedSize.height)
+        } else {
+            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             // 顶部标题栏
             HStack {
@@ -107,15 +131,12 @@ struct TodoListView: View {
                     Spacer()
                     updateBadge
                 }
-                .padding(.horizontal, 14)
+                .padding(.leading, 14)
+                // 这一支只出现在悬浮窗（有更新时）。右下角有缩放手柄，右侧要多留出它的位置，
+                // 否则更新图标会顶在手柄上。
+                .padding(.trailing, 14 + Self.resizeHandleFootprint)
                 .padding(.vertical, 10)
             }
-        }
-        .frame(width: 360, height: 440)
-        // 用户每手动结束一个任务就抖一次。用脉冲计数器而不是布尔：
-        // 布尔 true→true 不算变化，onChange 不触发，第二次结束就不抖了。
-        .onChange(of: state.finishPulse) { _ in
-            withAnimation(.easeOut(duration: 0.5)) { shakeTrigger += 1 }
         }
     }
 

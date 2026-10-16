@@ -9,9 +9,20 @@ struct FloatingPanelView: View {
         if state.isPanelCollapsed {
             collapsedIcon
         } else {
-            TodoListView(showsPanelToggle: false, showsCollapseButton: true)
+            TodoListView(showsPanelToggle: false, showsCollapseButton: true, fixedSize: nil)
                 .background(VisualEffectBackground())
+                .overlay(alignment: .bottomTrailing) { resizeHandle }
         }
+    }
+
+    /// 右下角的缩放手柄。`padding(6)` 是为了躲开背景层那个 12pt 圆角（它是 masksToBounds 的，
+    /// 贴太边会被裁掉）。折叠态是另一个视图，40×40 上没有手柄，也就没有东西会被误拖。
+    private var resizeHandle: some View {
+        PanelResizeHandle { size in
+            AppState.shared.resizeFloatingPanel(to: size)
+        }
+        .frame(width: 18, height: 18)
+        .padding(6)
     }
 
     /// 折叠态：单个圆形图标浮标，点击展开、拖动移动

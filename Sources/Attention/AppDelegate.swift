@@ -16,10 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 本地控制通道（供 MCP 使用）。必须持强引用，否则被释放后 socket 会静默失效。
     private var controlServer: ControlServer?
 
-    // 悬浮窗两种形态的固定尺寸
-    private let expandedSize = NSSize(width: 360, height: 440)
+    /// 悬浮窗折叠态的固定尺寸；展开态用 `AppState.floatingPanelSize`（用户可拖手柄调）
     private let collapsedSize = NSSize(width: 40, height: 40)
-    /// 菜单栏面板尺寸，与 TodoListView 内部固定的 frame 一致
+    /// 菜单栏面板尺寸，与 `TodoListView` 固定的 frame 一致
     private let popoverSize = NSSize(width: 360, height: 440)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -470,7 +469,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hosting = DraggableHostingView(rootView: rootView)
 
         let panel = FloatingPanel(
-            contentRect: NSRect(origin: .zero, size: AppState.shared.isPanelCollapsed ? collapsedSize : expandedSize),
+            contentRect: NSRect(origin: .zero,
+                                size: AppState.shared.isPanelCollapsed
+                                    ? collapsedSize
+                                    : AppState.shared.floatingPanelSize),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -507,24 +509,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                      y: visible.maxY - frame.height - 24))
     }
 
-    /// 根据折叠状态调整窗口尺寸，保持顶部对齐
-    private func updatePanelSize() {
+    /// 根据折叠状态调整窗口尺寸，保持左上角对齐。
+    ///
+    /// `isCollapsed` / `size` 一律**从订阅里传进来**，不在函数里回读 `AppState`——
+    /// `@Published` 是在 **willSet** 里投递的：sink 收到的是新值，但此刻回读同一个属性
+    /// 拿到的还是**旧值**。回读的写法会导致「松手后窗口被打回拖之前的大小」这类诡异现象
+    /// （折叠态回读到旧值时会算成展开尺寸，只是恰好被宿主视图按内容固有尺寸兜住了）。
+    /// 不传参数时（直接调用）才回读，那是安全的。
+    private func updatePanelSize(isCollapsed: Bool? = nil, size: NSSize? = nil) {
         guard let panel = panel,
               let screen = panel.screen ?? NSScreen.main else { return }
-        let target = AppState.shared.isPanelCollapsed ? collapsedSize : expandedSize
-        let visible = screen.visibleFrame
-        var frame = panel.frame
-        // 左上角锚点：折叠/展开时保持左上角不变，浮标与收起按钮同侧，避免鼠标左右移动
-        let anchor = NSPoint(x: frame.minX, y: frame.maxY)
-        var origin = NSPoint(x: anchor.x, y: anchor.y - target.height)
-        // 边界钳制，避免超出屏幕
-        if origin.x < visible.minX { origin.x = visible.minX }
-        if origin.y < visible.minY { origin.y = visible.minY }
-        if origin.x + target.width > visible.maxX { origin.x = visible.maxX - target.width }
-        if origin.y + target.height > visible.maxY { origin.y = visible.maxY - target.height }
-        frame.size = target
-        frame.origin = origin
-        panel.setFrame(frame, display: true, animate: false)
+        let collapsed = isCollapsed ?? AppState.shared.isPanelCollapsed
+        let desired = size ?? AppState.shared.floatingPanelSize
+        // 左上角锚点：折叠/展开时保持左上角不动，浮标与收起按钮同侧，避免鼠标左右移动
+        let anchor = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        // 展开态用用户调过的尺寸（在大屏上调过、换到小屏也会被屏幕钳住）；折叠态是固定的小浮标
+        let target = collapsed ? collapsedSize : desired
+        panel.setFrame(PanelGeometry.frame(anchoringTopLeft: anchor,
+                                           size: target,
+                                           inVisible: screen.visibleFrame),
+                       display: true, animate: false)
     }
 
     // MARK: - 订阅状态
