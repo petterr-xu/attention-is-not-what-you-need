@@ -617,8 +617,12 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
         let hit = super.hitTest(point)
         guard !(window?.isKeyWindow ?? true),
               let event = NSApp.currentEvent, event.type == .leftMouseDown,
-              let hit, !hit.acceptsFirstMouse(for: event) else { return hit }
-        return self
+              let hit else { return hit }
+        // AppKit 控件和文本视图不要问 `acceptsFirstMouse`：控件本来就接受第一次点击（不需要
+        // 重定向）；而 `NSTextView` 的实现内部会再走一遍 hitTest —— 在这里问它就无限递归、
+        // 栈溢出（改名时点进输入框闪退的就是这个）。
+        if hit is NSControl || hit is NSTextView { return hit }
+        return hit.acceptsFirstMouse(for: event) ? hit : self
     }
 }
 
